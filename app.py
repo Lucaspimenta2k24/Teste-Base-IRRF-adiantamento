@@ -89,13 +89,20 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
 
 def gerar_linha_posicional(row):
     """
-    Gera a linha em formato posicional de acordo com o leiaute.
+    Gera a linha em formato posicional de acordo com o novo leiaute:
+    - 001-002 (2): Fixo "10"
+    - 003-012 (10): Código do empregado (com zeros à esquerda)
+    - 013-018 (6): Competência ("AAAAMM")
+    - 019-027 (9): Código da rubrica (com zeros à esquerda)
+    - 028-029 (2): Tipo do Processo "41"
+    - 030-038 (9): Valor / Base IRRF (com zeros à esquerda, sem pontuação)
+    - 039-048 (10): Empresa (com zeros à esquerda)
     """
-    f_fixo = "41"
+    f_fixo = "10"  # Ajustado para "10" conforme solicitado
     f_emp = str(row['Código Empregado']).zfill(10)[:10]
     f_comp = converter_competencia_aaamm(row['Competência'])
     f_rubrica = str(row['Código Rubrica']).zfill(9)[:9]
-    f_proc = "00"
+    f_proc = "41"  # Ajustado para "41" conforme solicitado
     
     # Remove pontos e vírgulas da base IRRF para formar o inteiro de 9 posições
     val_limpo = re.sub(r'[^\d]', '', str(row['Base IRRF']))
