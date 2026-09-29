@@ -26,10 +26,8 @@ data_lancamento = st.sidebar.text_input(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.info(
-    "Dica: Caso o PDF da sua folha tenha um leiaute muito específico, você"
-    " pode ajustar as expressões regulares (Regex) no código fonte da função de"
-    " extração."
+modo_debug = st.sidebar.checkbox(
+    "🛠️ Ativar Modo Debug (Exibir texto bruto do PDF)"
 )
 
 # Área de Upload de Arquivos PDF
@@ -40,49 +38,56 @@ uploaded_files = st.file_uploader(
 )
 
 
-def extrair_dados_pdf(pdf_file):
-  """Função responsável por ler o PDF e extrair o código do empregado e a base de IRRF.
-
-  Utiliza expressões regulares para buscar padrões comuns em extratos de folha.
-  """
+def extrair_dados_pdf(pdf_file, debug=False):
+  """Função robusta para extração de código de empregado e base IRRF do PDF."""
   dados_extraidos = []
+  texto_total = ""
 
   with pdfplumber.open(pdf_file) as pdf:
-    for page in pdf.pages:
-      texto = page.extract_text()
-      if not texto:
+    for i, page in enumerate(pdf.pages):
+      texto_pagina = page.extract_text()
+      if not texto_pagina:
         continue
 
-      linhas = texto.split("\n")
+      if debug:
+        texto_total += (
+            f"\n--- PÁGINA {i+1} ---\n" + texto_pagina
+        )  # Acumula para exibir se debug ativado
+
+      linhas = texto_pagina.split("\n")
       codigo_empregado = None
       base_irrf = None
 
       for linha in linhas:
-        # Procura pelo código do empregado (Ex: Código: 123, Matrícula: 45, etc.)
+        # 1. Busca flexível para Código do Empregado
         match_emp = re.search(
-            r"(?:C[oó]digo|Matr[ií]cula|Emp\.?):\s*(\d+)", linha, re.IGNORECASE
+            r"(?:C[oó]d\.?|Matr[ií]c\.?|Empreg\.?|Funcion[aá]rio)[:\s]*(\d+)",
+            linha,
+            re.IGNORECASE,
         )
         if match_emp:
           codigo_empregado = match_emp.group(1)
 
-        # Procura pela Base de IRRF (Ex: Base IRRF: 1.500,00 ou BC IRRF 2.340,50)
+        # 2. Busca flexível para Base de IRRF (cobre diferentes nomenclaturas de sistemas de folha)
         match_irrf = re.search(
-            r"(?:Base\s*(?:de\s*)?IRRF|BC\s*IRRF|IRRF\s*Base)[:\s]*([\d\.,]+)",
+            r"(?:Base\s*(?:de\s*)?IRRF|BC\s*IRRF|IRRF\s*Base|Base\s*Calc\.?\s*IRRF)[:\s]*([\d\.,]+)",
             linha,
             re.IGNORECASE,
         )
         if match_irrf:
           base_irrf_str = match_irrf.group(1)
           try:
-            # Converte formato monetário brasileiro para float
+            # Limpa formato monetário (remove pontos de milhar e troca vírgula por ponto)
             base_irrf_limpo = (
                 base_irrf_str.replace(".", "").replace(",", ".").strip()
             )
-            base_irrf = float(base_irrf_limpo)
+            # Evita capturar valores vazios ou pontuações isoladas
+            if base_irrf_limpo and base_irrf_limpo != ".":
+              base_irrf = float(base_irrf_limpo)
           except ValueError:
             pass
 
-      # Se encontrou os dados na página, adiciona à lista
+      # Se encontrou ambos os campos na página ou acumulados
       if codigo_empregado and base_irrf is not None:
         dados_extraidos.append(
             {
@@ -91,6 +96,13 @@ def extrair_dados_pdf(pdf_file):
                 "base_irrf": base_irrf,
             }
         )
+
+  if debug and texto_total:
+    st.text_area(
+        f"Texto Extraído do Arquivo: {pdf_file.name}",
+        texto_total,
+        height=200,
+    )
 
   return dados_extraidos
 
@@ -101,13 +113,15 @@ if uploaded_files:
   todos_dados = []
 
   for arquivo in uploaded_files:
-    resultados = extrair_dados_pdf(arquivo)
+    resultados = extrair_dados_pdf(arquivo, debug=modo_debug)
     if resultados:
       todos_dados.extend(resultados)
     else:
       st.warning(
-          f"Não foi possível extrair dados automaticamente do arquivo"
-          f" {arquivo.name}. Verifique o leiaute do PDF."
+          f"⚠️ Não foi possível extrair dados automaticamente do arquivo"
+          f" **{arquivo.name}**. Verifique se o PDF contém texto selecionável"
+          f" ou ative o 'Modo Debug' na barra lateral para inspecionar o"
+          f" conteúdo lido."
       )
 
   if todos_dados:
