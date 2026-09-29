@@ -20,8 +20,8 @@ def converter_competencia_aaamm(competencia_str):
 
 def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999", competencia=""):
     """
-    Extrai o código do empregado, nome, CPF e Base IRRF de cada funcionário do PDF
-    utilizando uma varredura flexível baseada em blocos de CPF.
+    Extrai o código do empregado, nome, CPF e Base IRRF de cada funcionário
+    isolando o escopo individual de cada cadastro para evitar deslocamentos.
     """
     dados_funcionarios = []
     
@@ -35,54 +35,45 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
     if not texto_completo.strip():
         return pd.DataFrame()
 
-    # Expressões regulares flexíveis
-    padrao_cpf = re.compile(r"(\d{3}\.\d{3}\.\d{3}-\d{2})")
-    padrao_base_irrf = re.compile(r"(?:Base\s*IRRF|Base\s*de\s*Cálculo\s*IRRF|Base\s*Calc\.?\s*IRRF):?\s*([\d\.,]+)", re.IGNORECASE)
-    padrao_emp = re.compile(r"Empr\.?:?\s*(\d+)", re.IGNORECASE)
-
-    # Encontrar todas as posições de CPFs no texto para fatiar em blocos por funcionário
-    posicoes_cpf = [m.start() for m in padrao_cpf.finditer(texto_completo)]
+    # Identificar cada início de cadastro de funcionário pelo padrão 'Empr.:'
+    # Dividimos o texto exatamente onde começa cada novo funcionário
+    partes_texto = re.split(r"(?=Empr\.?:?)", texto_completo, flags=re.IGNORECASE)
     
-    blocos = []
-    if posicoes_cpf:
-        for i in range(len(posicoes_cpf)):
-            inicio = posicoes_cpf[i] - 250  # Pega o contexto anterior (onde fica o cabeçalho Empr/Nome)
-            inicio = max(0, inicio)
-            fim = posicoes_cpf[i+1] - 250 if i + 1 < len(posicoes_cpf) else len(texto_completo)
-            blocos.append(texto_completo[inicio:fim])
-    else:
-        # Fallback caso o CPF não tenha pontuação exata
-        blocos = [texto_completo]
+    padrao_emp = re.compile(r"Empr\.?:?\s*(\d+)", re.IGNORECASE)
+    padrao_cpf = re.compile(r"(\d{3}\.\d{3}\.\d{3}-\d{2})")
+    # Padrão focado estritamente na linha ou proximidade imediata da Base IRRF
+    padrao_base_irrf = re.compile(r"(?:Base\s*IRRF|Base\s*de\s*Cálculo\s*IRRF|Base\s*Calc\.?\s*IRRF):?\s*([\d\.,]+)", re.IGNORECASE)
 
-    for bloco in blocos:
-        match_cpf = padrao_cpf.search(bloco)
-        if not match_cpf:
+    for bloco in partes_texto:
+        if not bloco.strip():
             continue
             
+        # O bloco atual deve conter obrigatoriamente um CPF e um Código de Empregado para ser válido
+        match_emp = padrao_emp.search(bloco)
+        match_cpf = padrao_cpf.search(bloco)
+        
+        if not match_emp or not match_cpf:
+            continue
+            
+        emp_id = match_emp.group(1).strip()
         cpf = match_cpf.group(1).strip()
         
-        # Extrair Código do Empregado dentro do bloco
-        match_emp = padrao_emp.search(bloco)
-        emp_id = match_emp.group(1).strip() if match_emp else "1"
-        
-        # Extrair Base IRRF dentro do bloco
+        # Extração da Base IRRF restrita estritamente ao bloco isolado deste funcionário
         match_base = padrao_base_irrf.search(bloco)
         base_irrf = match_base.group(1).strip() if match_base else "0,00"
         
-        # Tentar capturar o nome do funcionário nas linhas do bloco
+        # Extrair o nome do funcionário logo após o código da empresa
         linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
         nome = "Funcionário"
         for linha in linhas:
             if "Empr" in linha or "Empresa" in linha:
-                partes = re.split(r"Empr\.?:?\s*\d+", linha, flags=re.IGNORECASE)
-                if len(partes) > 1 and len(partes[1].strip()) > 2:
-                    nome = partes[1].strip()
+                txt_limpo = re.sub(r"Empr\.?:?\s*\d+", "", linha, flags=re.IGNORECASE).strip()
+                if len(txt_limpo) > 2:
+                    nome = txt_limpo
                     break
-        if nome == "Funcionário" and len(linhas) > 0:
-            nome = linhas[0][:40]
 
-        # Evitar duplicatas do mesmo CPF no mesmo arquivo
-        if not any(d.get('CPF') == cpf for d in dados_funcionarios):
+        # Evitar duplicatas do mesmo funcionário/CPF
+        if not any(d.get('CPF') == cpf and d.get('Código Empregado') == emp_id for d in dados_funcionarios):
             dados_funcionarios.append({
                 "Empresa": str(codigo_empresa).strip(),
                 "Código Empregado": emp_id,
