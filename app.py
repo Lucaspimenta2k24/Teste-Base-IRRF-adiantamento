@@ -13,7 +13,6 @@ def converter_competencia_aaamm(competencia_str):
             mes, ano = partes[0].zfill(2), partes[1]
             return f"{ano}{mes}"
     if len(comp_limpa) == 6:
-        # Assume que o formato digitado pode ser MMAAAA
         mes = comp_limpa[:2]
         ano = comp_limpa[2:]
         return f"{ano}{mes}"
@@ -21,8 +20,7 @@ def converter_competencia_aaamm(competencia_str):
 
 def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999", competencia=""):
     """
-    Extrai informações de funcionários (Código do Empregado, Nome, CPF e Base IRRF)
-    de forma flexível a partir do PDF.
+    Extrai o código do empregado, nome, CPF e Base IRRF de cada funcionário do PDF.
     """
     dados_funcionarios = []
     
@@ -36,40 +34,41 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
     if not texto_completo.strip():
         return pd.DataFrame()
 
-    # Expressões regulares para capturar dados
-    padrao_cabecalho_emp = re.compile(r"Empr\.?:?\s*(\d+)\s+(.*?)\s+Situação:?\s*(.*?)\s+CPF:?\s*([\d\.\-]+)", re.IGNORECASE)
+    # Expressão regular para capturar o cabeçalho do empregado: "Empr.: [Código] [Nome]"
+    padrao_cabecalho = re.compile(r"Empr\.?:?\s*(\d+)\s+(.*?)(?=\s+Situação|\s+CPF|\n|$)", re.IGNORECASE)
     padrao_cpf = re.compile(r"(\d{3}\.\d{3}\.\d{3}-\d{2})")
     padrao_base_irrf = re.compile(r"Base\s*IRRF:?\s*([\d\.,]+)", re.IGNORECASE)
 
-    # Dividir o texto em blocos utilizando o CPF como âncora
-    blocos = re.split(r"(?=\d{3}\.\d{3}\.\d{3}-\d{2})", texto_completo)
+    # Dividir o texto em blocos utilizando 'Empr.:' como delimitador
+    blocos = re.split(r"(?=Empr\.?:?)", texto_completo, flags=re.IGNORECASE)
     
     for bloco in blocos:
-        match_cpf = padrao_cpf.search(bloco)
-        if not match_cpf:
+        if not bloco.strip():
             continue
             
-        cpf = match_cpf.group(1)
-        
-        # Tentar extrair o ID do empregado e o nome do bloco
-        match_emp = padrao_cabecalho_emp.search(bloco)
-        if match_emp:
-            emp_id = match_emp.group(1)
-            nome = match_emp.group(2).strip()
-        else:
-            emp_id = "1" # Fallback caso não ache na âncora exata
-            nome = "Funcionário"
+        # Extrair Código do Empregado e Nome
+        match_cab = padrao_cabecalho.search(bloco)
+        if not match_cab:
+            continue
             
-        # Buscar a Base IRRF
+        emp_id = match_cab.group(1).strip()
+        nome = match_cab.group(2).strip()
+        
+        # Extrair CPF do bloco
+        match_cpf = padrao_cpf.search(bloco)
+        cpf = match_cpf.group(1).strip() if match_cpf else "000.000.000-00"
+        
+        # Extrair Base IRRF do bloco
         match_base = padrao_base_irrf.search(bloco)
-        base_irrf = match_base.group(1) if match_base else "0,00"
+        base_irrf = match_base.group(1).strip() if match_base else "0,00"
 
-        # Evitar duplicatas do mesmo CPF no mesmo arquivo
-        if not any(d['CPF'] == cpf for d in dados_funcionarios):
+        # Evitar duplicatas do mesmo CPF/Empregado no mesmo arquivo
+        if not any(d.get('CPF') == cpf and d.get('Código Empregado') == emp_id for d in dados_funcionarios):
             dados_funcionarios.append({
                 "Empresa": str(codigo_empresa).strip(),
-                "Código Empregado": str(emp_id).strip(),
+                "Código Empregado": emp_id,
                 "Funcionário": nome,
+                "CPF": cpf,
                 "Competência": competencia.strip(),
                 "Base IRRF": base_irrf,
                 "Código Rubrica": str(codigo_rubrica).strip()
@@ -79,14 +78,14 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
 
 def gerar_linha_posicional(row):
     """
-    Gera a linha em formato posicional de acordo estrito com o leiaute fornecido:
+    Gera a linha em formato posicional de acordo com o leiaute:
     - 001-002 (2): Fixo "41"
-    - 003-012 (10): Código do empregado ("0000000000")
+    - 003-012 (10): Código do empregado (com zeros à esquerda)
     - 013-018 (6): Competência ("AAAAMM")
-    - 019-027 (9): Código da rubrica ("000000000")
+    - 019-027 (9): Código da rubrica (com zeros à esquerda)
     - 028-029 (2): Tipo do Processo ("00")
-    - 030-038 (9): Valor / Base IRRF ("000000000")
-    - 039-048 (10): Empresa ("0000000000")
+    - 030-038 (9): Valor / Base IRRF (com zeros à esquerda, sem pontuação)
+    - 039-048 (10): Empresa (com zeros à esquerda)
     """
     f_fixo = "41"
     f_emp = str(row['Código Empregado']).zfill(10)[:10]
@@ -94,7 +93,7 @@ def gerar_linha_posicional(row):
     f_rubrica = str(row['Código Rubrica']).zfill(9)[:9]
     f_proc = "00"
     
-    # Remove pontos e vírgulas do valor para ajustar ao formato numérico inteiro de 9 posições
+    # Remove pontos e vírgulas da base IRRF para formar o número inteiro de 9 posições
     val_limpo = re.sub(r'[^\d]', '', str(row['Base IRRF']))
     f_valor = val_limpo.zfill(9)[:9]
     
@@ -126,8 +125,9 @@ if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
             f.write(arquivo.getbuffer())
             
         df_extrato = extrair_dados_extrato(caminho_temp, codigo_empresa_input, codigo_rubrica, competencia_input)
-        df_extrato["Arquivo Origem"] = arquivo.name
-        todos_dados.append(df_extrato)
+        if not df_extrato.empty:
+            df_extrato["Arquivo Origem"] = arquivo.name
+            todos_dados.append(df_extrato)
         
         os.remove(caminho_temp)
         
@@ -135,7 +135,7 @@ if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
         df_final = pd.concat(todos_dados, ignore_index=True)
         
         if df_final.empty:
-            st.warning("Nenhum dado foi extraído. Certifique-se de que os PDFs contêm os CPFs e o campo 'Base IRRF'.")
+            st.warning("Nenhum dado foi extraído. Verifique se o PDF contém o padrão 'Empr.:' e 'Base IRRF'.")
         else:
             st.success("Processamento concluído com sucesso!")
             st.dataframe(df_final)
@@ -144,7 +144,7 @@ if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
             output_csv = "extrato_irrf_consolidado.csv"
             df_final.to_csv(output_csv, index=False, sep=";", encoding="utf-8-sig")
             
-            # Geração do Arquivo TXT posicional estrito conforme o leiaute
+            # Geração do Arquivo TXT posicional estrito
             output_txt = "importacao_irrf.txt"
             with open(output_txt, "w", encoding="utf-8") as f:
                 for _, row in df_final.iterrows():
@@ -170,3 +170,5 @@ if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
                         file_name=output_txt,
                         mime="text/plain"
                     )
+    else:
+        st.warning("Nenhum dado válido foi encontrado nos arquivos enviados.")
