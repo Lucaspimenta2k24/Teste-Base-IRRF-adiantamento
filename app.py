@@ -34,13 +34,11 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
     if not texto_completo.strip():
         return pd.DataFrame()
 
-    # Identificar cada início de cadastro de funcionário pelo padrão do código da empresa/empregado
     partes_texto = re.split(r"(?=Empr\.?:?\s*\d+)", texto_completo, flags=re.IGNORECASE)
     
     padrao_emp = re.compile(r"Empr\.?:?\s*(\d+)", re.IGNORECASE)
     padrao_cpf = re.compile(r"(\d{3}\.\d{3}\.\d{3}-\d{2})")
     
-    # Regex aprimorada para capturar variações e possíveis quebras de linha entre o rótulo e o valor da Base IRRF
     padrao_base_irrf = re.compile(
         r"(?:Base\s*(?:de\s*Cálculo\s*)?(?:do\s*)?IRRF|Base\s*Calc\.?\s*IRRF|IRRF\s*Base)[:\s\n]*([\d\.]+,\d{2})", 
         re.IGNORECASE
@@ -59,11 +57,9 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
         emp_id = match_emp.group(1).strip()
         cpf = match_cpf.group(1).strip()
         
-        # Extração flexível da Base IRRF dentro do bloco isolado do funcionário
         match_base = padrao_base_irrf.search(bloco)
         base_irrf = match_base.group(1).strip() if match_base else "0,00"
         
-        # Extrair o nome do funcionário
         linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
         nome = "Funcionário"
         for linha in linhas:
@@ -73,7 +69,6 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
                     nome = txt_limpo
                     break
 
-        # Evitar duplicatas do mesmo funcionário/CPF
         if not any(d.get('CPF') == cpf and d.get('Código Empregado') == emp_id for d in dados_funcionarios):
             dados_funcionarios.append({
                 "Empresa": str(codigo_empresa).strip(),
@@ -88,23 +83,12 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
     return pd.DataFrame(dados_funcionarios)
 
 def gerar_linha_posicional(row):
-    """
-    Gera a linha em formato posicional de acordo com o novo leiaute:
-    - 001-002 (2): Fixo "10"
-    - 003-012 (10): Código do empregado (com zeros à esquerda)
-    - 013-018 (6): Competência ("AAAAMM")
-    - 019-027 (9): Código da rubrica (com zeros à esquerda)
-    - 028-029 (2): Tipo do Processo "41"
-    - 030-038 (9): Valor / Base IRRF (com zeros à esquerda, sem pontuação)
-    - 039-048 (10): Empresa (com zeros à esquerda)
-    """
-    f_fixo = "10"  # Ajustado para "10" conforme solicitado
+    f_fixo = "10"  # Fixo "10"
     f_emp = str(row['Código Empregado']).zfill(10)[:10]
     f_comp = converter_competencia_aaamm(row['Competência'])
     f_rubrica = str(row['Código Rubrica']).zfill(9)[:9]
-    f_proc = "41"  # Ajustado para "41" conforme solicitado
+    f_proc = "41"  # Tipo de Processo "41"
     
-    # Remove pontos e vírgulas da base IRRF para formar o inteiro de 9 posições
     val_limpo = re.sub(r'[^\d]', '', str(row['Base IRRF']))
     f_valor = val_limpo.zfill(9)[:9]
     
@@ -151,11 +135,9 @@ if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
             st.success("Processamento concluído com sucesso!")
             st.dataframe(df_final)
             
-            # Geração de Planilha CSV para conferência
             output_csv = "extrato_irrf_consolidado.csv"
             df_final.to_csv(output_csv, index=False, sep=";", encoding="utf-8-sig")
             
-            # Geração do Arquivo TXT posicional estrito
             output_txt = "importacao_irrf.txt"
             with open(output_txt, "w", encoding="utf-8") as f:
                 for _, row in df_final.iterrows():
