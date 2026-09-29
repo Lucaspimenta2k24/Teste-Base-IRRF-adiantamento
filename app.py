@@ -4,7 +4,7 @@ import pandas as pd
 import pdfplumber
 import streamlit as st
 
-def extrair_dados_extrato(caminho_pdf, codigo_rubrica_irrf="999"):
+def extrair_dados_extrato(caminho_pdf, codigo_rubrica_irrf="999", competencia=""):
     """
     Extrai informações de funcionários, Base IRRF e o valor
     da rubrica de IRRF especificada a partir de um PDF de extrato mensal.
@@ -54,6 +54,7 @@ def extrair_dados_extrato(caminho_pdf, codigo_rubrica_irrf="999"):
             "Empresa/ID": emp_id.strip(),
             "Funcionário": nome.strip(),
             "CPF": cpf.strip(),
+            "Competência": competencia.strip(),
             "Base IRRF": base_irrf,
             f"IRRF (Rubrica {codigo_rubrica_irrf})": valor_irrf
         })
@@ -61,16 +62,20 @@ def extrair_dados_extrato(caminho_pdf, codigo_rubrica_irrf="999"):
     return pd.DataFrame(dados_funcionarios)
 
 # --- Interface Gráfica com Streamlit ---
-st.title("Extrator Automatizado de IRRF - Folha Mensal")
-st.write("Faça o upload dos arquivos PDF de extratos mensais e informe o código da rubrica de IRRF.")
+st.title("Extrator Automatizado de IRRF e Geração de TXT")
+st.write("Faça o upload dos extratos em PDF, informe a competência e configure os parâmetros de rubrica.")
 
-# Campo para o usuário informar o código da rubrica
-codigo_rubrica = st.text_input("Código da Rubrica para IRRF:", value="999")
+# Campos de Entrada do Usuário
+col1, col2 = st.columns(2)
+with col1:
+    codigo_rubrica = st.text_input("Código da Rubrica para IRRF:", value="999")
+with col2:
+    competencia_input = st.text_input("Competência (Ex: 09/2026):", value="09/2026")
 
 # Upload de múltiplos arquivos PDF
 arquivos_pdf = st.file_uploader("Selecione os arquivos PDF", type=["pdf"], accept_multiple_files=True)
 
-if arquivos_pdf and st.button("Processar Extratos"):
+if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
     todos_dados = []
     
     for arquivo in arquivos_pdf:
@@ -81,7 +86,7 @@ if arquivos_pdf and st.button("Processar Extratos"):
             f.write(arquivo.getbuffer())
             
         # Processa o PDF
-        df_extrato = extrair_dados_extrato(caminho_temp, codigo_rubrica)
+        df_extrato = extrair_dados_extrato(caminho_temp, codigo_rubrica, competencia_input)
         df_extrato["Arquivo Origem"] = arquivo.name
         todos_dados.append(df_extrato)
         
@@ -93,14 +98,37 @@ if arquivos_pdf and st.button("Processar Extratos"):
         st.success("Processamento concluído com sucesso!")
         st.dataframe(df_final)
         
-        # Botão para download em Excel
+        # --- Geração de Arquivos para Download ---
+        
+        # 1. Excel Consolidado
         output_excel = "extrato_irrf_consolidado.xlsx"
         df_final.to_excel(output_excel, index=False)
         
-        with open(output_excel, "rb") as f:
-            st.download_button(
-                label="Baixar Relatório Consolidado (Excel)",
-                data=f,
-                file_name=output_excel,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        # 2. Geração do Arquivo TXT (Exemplo de formato delimitado por ponto e vírgula ou tabulação)
+        # Você pode ajustar o formato das linhas conforme o leiaute exigido pelo seu sistema (ex: Domínio, Fortes, etc.)
+        output_txt = "importacao_irrf.txt"
+        with open(output_txt, "w", encoding="utf-8") as f:
+            for _, row in df_final.iterrows():
+                # Formato padrão: ID_Empresa; CPF; Competencia; Base_IRRF; Valor_IRRF
+                linha_txt = f"{row['Empresa/ID']};{row['CPF']};{row['Competência']};{row['Base IRRF']};{row[f'IRRF (Rubrica {codigo_rubrica})']}\n"
+                f.write(linha_txt)
+
+        col_dl1, col_dl2 = st.columns(2)
+        
+        with col_dl1:
+            with open(output_excel, "rb") as f:
+                st.download_button(
+                    label="Baixar Excel Consolidado",
+                    data=f,
+                    file_name=output_excel,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                
+        with col_dl2:
+            with open(output_txt, "r", encoding="utf-8") as f:
+                st.download_button(
+                    label="Baixar TXT para Importação",
+                    data=f,
+                    file_name=output_txt,
+                    mime="text/plain"
+                )
