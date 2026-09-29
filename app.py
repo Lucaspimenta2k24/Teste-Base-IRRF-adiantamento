@@ -20,7 +20,8 @@ def converter_competencia_aaamm(competencia_str):
 
 def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999", competencia=""):
     """
-    Extrai o código do empregado, nome, CPF e Base IRRF de cada funcionário do PDF.
+    Extrai o código do empregado, nome, CPF e Base IRRF de cada funcionário do PDF
+    utilizando uma varredura flexível baseada em blocos de CPF.
     """
     dados_funcionarios = []
     
@@ -34,36 +35,54 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
     if not texto_completo.strip():
         return pd.DataFrame()
 
-    # Expressão regular para capturar o cabeçalho do empregado: "Empr.: [Código] [Nome]"
-    padrao_cabecalho = re.compile(r"Empr\.?:?\s*(\d+)\s+(.*?)(?=\s+Situação|\s+CPF|\n|$)", re.IGNORECASE)
+    # Expressões regulares flexíveis
     padrao_cpf = re.compile(r"(\d{3}\.\d{3}\.\d{3}-\d{2})")
-    padrao_base_irrf = re.compile(r"Base\s*IRRF:?\s*([\d\.,]+)", re.IGNORECASE)
+    padrao_base_irrf = re.compile(r"(?:Base\s*IRRF|Base\s*de\s*Cálculo\s*IRRF|Base\s*Calc\.?\s*IRRF):?\s*([\d\.,]+)", re.IGNORECASE)
+    padrao_emp = re.compile(r"Empr\.?:?\s*(\d+)", re.IGNORECASE)
 
-    # Dividir o texto em blocos utilizando 'Empr.:' como delimitador
-    blocos = re.split(r"(?=Empr\.?:?)", texto_completo, flags=re.IGNORECASE)
+    # Encontrar todas as posições de CPFs no texto para fatiar em blocos por funcionário
+    posicoes_cpf = [m.start() for m in padrao_cpf.finditer(texto_completo)]
     
+    blocos = []
+    if posicoes_cpf:
+        for i in range(len(posicoes_cpf)):
+            inicio = posicoes_cpf[i] - 250  # Pega o contexto anterior (onde fica o cabeçalho Empr/Nome)
+            inicio = max(0, inicio)
+            fim = posicoes_cpf[i+1] - 250 if i + 1 < len(posicoes_cpf) else len(texto_completo)
+            blocos.append(texto_completo[inicio:fim])
+    else:
+        # Fallback caso o CPF não tenha pontuação exata
+        blocos = [texto_completo]
+
     for bloco in blocos:
-        if not bloco.strip():
-            continue
-            
-        # Extrair Código do Empregado e Nome
-        match_cab = padrao_cabecalho.search(bloco)
-        if not match_cab:
-            continue
-            
-        emp_id = match_cab.group(1).strip()
-        nome = match_cab.group(2).strip()
-        
-        # Extrair CPF do bloco
         match_cpf = padrao_cpf.search(bloco)
-        cpf = match_cpf.group(1).strip() if match_cpf else "000.000.000-00"
+        if not match_cpf:
+            continue
+            
+        cpf = match_cpf.group(1).strip()
         
-        # Extrair Base IRRF do bloco
+        # Extrair Código do Empregado dentro do bloco
+        match_emp = padrao_emp.search(bloco)
+        emp_id = match_emp.group(1).strip() if match_emp else "1"
+        
+        # Extrair Base IRRF dentro do bloco
         match_base = padrao_base_irrf.search(bloco)
         base_irrf = match_base.group(1).strip() if match_base else "0,00"
+        
+        # Tentar capturar o nome do funcionário nas linhas do bloco
+        linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
+        nome = "Funcionário"
+        for linha in linhas:
+            if "Empr" in linha or "Empresa" in linha:
+                partes = re.split(r"Empr\.?:?\s*\d+", linha, flags=re.IGNORECASE)
+                if len(partes) > 1 and len(partes[1].strip()) > 2:
+                    nome = partes[1].strip()
+                    break
+        if nome == "Funcionário" and len(linhas) > 0:
+            nome = linhas[0][:40]
 
-        # Evitar duplicatas do mesmo CPF/Empregado no mesmo arquivo
-        if not any(d.get('CPF') == cpf and d.get('Código Empregado') == emp_id for d in dados_funcionarios):
+        # Evitar duplicatas do mesmo CPF no mesmo arquivo
+        if not any(d.get('CPF') == cpf for d in dados_funcionarios):
             dados_funcionarios.append({
                 "Empresa": str(codigo_empresa).strip(),
                 "Código Empregado": emp_id,
@@ -93,7 +112,7 @@ def gerar_linha_posicional(row):
     f_rubrica = str(row['Código Rubrica']).zfill(9)[:9]
     f_proc = "00"
     
-    # Remove pontos e vírgulas da base IRRF para formar o número inteiro de 9 posições
+    # Remove pontos e vírgulas da base IRRF para formar o inteiro de 9 posições
     val_limpo = re.sub(r'[^\d]', '', str(row['Base IRRF']))
     f_valor = val_limpo.zfill(9)[:9]
     
@@ -135,7 +154,7 @@ if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
         df_final = pd.concat(todos_dados, ignore_index=True)
         
         if df_final.empty:
-            st.warning("Nenhum dado foi extraído. Verifique se o PDF contém o padrão 'Empr.:' e 'Base IRRF'.")
+            st.warning("Nenhum dado foi extraído. Verifique se o PDF contém os CPFs e o campo 'Base IRRF'.")
         else:
             st.success("Processamento concluído com sucesso!")
             st.dataframe(df_final)
@@ -171,4 +190,4 @@ if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
                         mime="text/plain"
                     )
     else:
-        st.warning("Nenhum dado válido foi encontrado nos arquivos enviados.")
+        st.warning("Nenhum dado válido foi encontrado nos arquivos enviados. Verifique se o extrato contém CPFs legíveis.")
