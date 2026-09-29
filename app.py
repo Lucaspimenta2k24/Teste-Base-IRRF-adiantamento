@@ -20,8 +20,7 @@ def converter_competencia_aaamm(competencia_str):
 
 def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999", competencia=""):
     """
-    Extrai o código do empregado, nome, CPF e Base IRRF de cada funcionário
-    isolando o escopo individual de cada cadastro para evitar deslocamentos.
+    Extrai os dados de cada funcionário garantindo flexibilidade na leitura da Base IRRF.
     """
     dados_funcionarios = []
     
@@ -35,20 +34,22 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
     if not texto_completo.strip():
         return pd.DataFrame()
 
-    # Identificar cada início de cadastro de funcionário pelo padrão 'Empr.:'
-    # Dividimos o texto exatamente onde começa cada novo funcionário
-    partes_texto = re.split(r"(?=Empr\.?:?)", texto_completo, flags=re.IGNORECASE)
+    # Identificar cada início de cadastro de funcionário pelo padrão do código da empresa/empregado
+    partes_texto = re.split(r"(?=Empr\.?:?\s*\d+)", texto_completo, flags=re.IGNORECASE)
     
     padrao_emp = re.compile(r"Empr\.?:?\s*(\d+)", re.IGNORECASE)
     padrao_cpf = re.compile(r"(\d{3}\.\d{3}\.\d{3}-\d{2})")
-    # Padrão focado estritamente na linha ou proximidade imediata da Base IRRF
-    padrao_base_irrf = re.compile(r"(?:Base\s*IRRF|Base\s*de\s*Cálculo\s*IRRF|Base\s*Calc\.?\s*IRRF):?\s*([\d\.,]+)", re.IGNORECASE)
+    
+    # Regex aprimorada para capturar variações e possíveis quebras de linha entre o rótulo e o valor da Base IRRF
+    padrao_base_irrf = re.compile(
+        r"(?:Base\s*(?:de\s*Cálculo\s*)?(?:do\s*)?IRRF|Base\s*Calc\.?\s*IRRF|IRRF\s*Base)[:\s\n]*([\d\.]+,\d{2})", 
+        re.IGNORECASE
+    )
 
     for bloco in partes_texto:
         if not bloco.strip():
             continue
             
-        # O bloco atual deve conter obrigatoriamente um CPF e um Código de Empregado para ser válido
         match_emp = padrao_emp.search(bloco)
         match_cpf = padrao_cpf.search(bloco)
         
@@ -58,11 +59,11 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
         emp_id = match_emp.group(1).strip()
         cpf = match_cpf.group(1).strip()
         
-        # Extração da Base IRRF restrita estritamente ao bloco isolado deste funcionário
+        # Extração flexível da Base IRRF dentro do bloco isolado do funcionário
         match_base = padrao_base_irrf.search(bloco)
         base_irrf = match_base.group(1).strip() if match_base else "0,00"
         
-        # Extrair o nome do funcionário logo após o código da empresa
+        # Extrair o nome do funcionário
         linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
         nome = "Funcionário"
         for linha in linhas:
@@ -88,14 +89,7 @@ def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999",
 
 def gerar_linha_posicional(row):
     """
-    Gera a linha em formato posicional de acordo com o leiaute:
-    - 001-002 (2): Fixo "41"
-    - 003-012 (10): Código do empregado (com zeros à esquerda)
-    - 013-018 (6): Competência ("AAAAMM")
-    - 019-027 (9): Código da rubrica (com zeros à esquerda)
-    - 028-029 (2): Tipo do Processo ("00")
-    - 030-038 (9): Valor / Base IRRF (com zeros à esquerda, sem pontuação)
-    - 039-048 (10): Empresa (com zeros à esquerda)
+    Gera a linha em formato posicional de acordo com o leiaute.
     """
     f_fixo = "41"
     f_emp = str(row['Código Empregado']).zfill(10)[:10]
@@ -119,9 +113,9 @@ col1, col2, col3 = st.columns(3)
 with col1:
     codigo_empresa_input = st.text_input("Código da Empresa:", value="1")
 with col2:
-    codigo_rubrica = st.text_input("Código da Rubrica (TXT):", value="999")
+    codigo_rubrica = st.text_input("Código da Rubrica (TXT):", value="2000")
 with col3:
-    competencia_input = st.text_input("Competência (Ex: 09/2026):", value="09/2026")
+    competencia_input = st.text_input("Competência (Ex: 06/2026):", value="06/2026")
 
 arquivos_pdf = st.file_uploader("Selecione os arquivos PDF", type=["pdf"], accept_multiple_files=True)
 
@@ -181,4 +175,4 @@ if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
                         mime="text/plain"
                     )
     else:
-        st.warning("Nenhum dado válido foi encontrado nos arquivos enviados. Verifique se o extrato contém CPFs legíveis.")
+        st.warning("Nenhum dado válido foi encontrado nos arquivos enviados.")
