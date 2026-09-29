@@ -4,17 +4,13 @@ import pandas as pd
 import pdfplumber
 import streamlit as st
 
-def extrair_dados_extrato(caminho_pdf, codigo_rubrica_informado="999", competencia=""):
+def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999", competencia=""):
     """
-    Extrai informações de funcionários e a Base IRRF a partir do PDF,
-    vinculando ao código da rubrica informado pelo usuário para gerar a importação.
+    Extrai informações de funcionários (buscando CPFs e Bases IRRF) de forma flexível,
+    vinculando o código da empresa, da rubrica e a competência informados.
     """
     dados_funcionarios = []
     
-    # Expressões regulares mais flexíveis para capturar o cabeçalho do empregado e a Base IRRF
-    padrao_cabecalho_emp = re.compile(r"Empr\.:?\s*(\d+)\s+(.*?)\s+Situação:?\s*(.*?)\s+CPF:?\s*([\d\.\-]+)", re.IGNORECASE)
-    padrao_base_irrf = re.compile(r"Base\s*IRRF:?\s*([\d\.,]+)", re.IGNORECASE)
-
     with pdfplumber.open(caminho_pdf) as pdf:
         texto_completo = ""
         for pagina in pdf.pages:
@@ -22,52 +18,61 @@ def extrair_dados_extrato(caminho_pdf, codigo_rubrica_informado="999", competenc
             if texto_extraido:
                 texto_completo += texto_extraido + "\n"
 
-    # Se precisar inspecionar o texto bruto para conferência, descomente a linha abaixo:
-    # st.text_area("Texto Extraído do PDF (Debug):", texto_completo[:2000], height=200)
+    if not texto_completo.strip():
+        return pd.DataFrame()
 
-    # Dividir o texto por blocos de funcionários com base na palavra 'Empr.:'
-    blocos = re.split(r"Empr\.:?", texto_completo, flags=re.IGNORECASE)
+    # Expressões regulares flexíveis para localizar CPFs e Bases IRRF no texto
+    padrao_cpf = re.compile(r"(\d{3}\.\d{3}\.\d{3}-\d{2})")
+    padrao_base_irrf = re.compile(r"Base\s*IRRF:?\s*([\d\.,]+)", re.IGNORECASE)
+
+    # Dividir o texto em blocos utilizando o CPF como âncora principal
+    blocos = re.split(r"(?=\d{3}\.\d{3}\.\d{3}-\d{2})", texto_completo)
     
-    for bloco in blocos[1:]:
-        linhas = bloco.split("\n")
-        primeira_linha = linhas[0]
-        
-        match_emp = padrao_cabecalho_emp.search("Empr.: " + primeira_linha)
-        if not match_emp:
-            # Tenta uma variação caso a primeira linha venha quebrada
-            bloco_primeiras_linhas = "\n".join(linhas[:3])
-            match_emp = padrao_cabecalho_emp.search(bloco_primeiras_linhas)
-            if not match_emp:
-                continue
-            emp_id, nome, situacao, cpf = match_emp.groups()
-        else:
-            emp_id, nome, situacao, cpf = match_emp.groups()
+    for bloco in blocos:
+        match_cpf = padrao_cpf.search(bloco)
+        if not match_cpf:
+            continue
             
-        bloco_texto = "\n".join(linhas)
+        cpf = match_cpf.group(1)
         
-        # Extrair a Base IRRF correspondente ao funcionário no bloco
-        match_base = padrao_base_irrf.search(bloco_texto)
+        # Buscar a Base IRRF dentro deste bloco do funcionário
+        match_base = padrao_base_irrf.search(bloco)
         base_irrf = match_base.group(1) if match_base else "0,00"
+        
+        # Tentar extrair o nome da primeira linha do bloco
+        linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
+        nome = "Funcionário"
+        if linhas:
+            primeira_linha = linhas[0]
+            # Remove termos comuns de cabeçalho para isolar o nome se possível
+            nome_limpo = re.sub(r"(Empr\.?:?.*|Situação:?.*|CPF:?.*|Adm:?.*)", "", primeira_linha, flags=re.IGNORECASE).strip()
+            if len(nome_limpo) > 2:
+                nome = nome_limpo
 
-        dados_funcionarios.append({
-            "Empresa/ID": emp_id.strip(),
-            "Funcionário": nome.strip(),
-            "CPF": cpf.strip(),
-            "Competência": competencia.strip(),
-            "Base IRRF": base_irrf,
-            "Código Rubrica": str(codigo_rubrica_informado).strip()
-        })
+        # Evitar duplicatas do mesmo CPF no mesmo arquivo
+        if not any(d['CPF'] == cpf for d in dados_funcionarios):
+            dados_funcionarios.append({
+                "Empresa": str(codigo_empresa).strip(),
+                "Funcionário": nome,
+                "CPF": cpf,
+                "Competência": competencia.strip(),
+                "Base IRRF": base_irrf,
+                "Código Rubrica": str(codigo_rubrica).strip()
+            })
 
     return pd.DataFrame(dados_funcionarios)
 
 # --- Interface Gráfica com Streamlit ---
 st.title("Extrator Automatizado de Base IRRF e Geração de TXT")
-st.write("Faça o upload dos extratos em PDF, informe a competência e o código da rubrica desejada para o arquivo de importação.")
+st.write("Faça o upload dos extratos em PDF, configure os parâmetros abaixo e gere os arquivos de importação.")
 
-col1, col2 = st.columns(2)
+# Campos de Parâmetros na Tela
+col1, col2, col3 = st.columns(3)
 with col1:
-    codigo_rubrica = st.text_input("Código da Rubrica para o TXT:", value="999")
+    codigo_empresa_input = st.text_input("Código da Empresa:", value="1")
 with col2:
+    codigo_rubrica = st.text_input("Código da Rubrica (TXT):", value="999")
+with col3:
     competencia_input = st.text_input("Competência (Ex: 09/2026):", value="09/2026")
 
 arquivos_pdf = st.file_uploader("Selecione os arquivos PDF", type=["pdf"], accept_multiple_files=True)
@@ -81,7 +86,7 @@ if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
         with open(caminho_temp, "wb") as f:
             f.write(arquivo.getbuffer())
             
-        df_extrato = extrair_dados_extrato(caminho_temp, codigo_rubrica, competencia_input)
+        df_extrato = extrair_dados_extrato(caminho_temp, codigo_empresa_input, codigo_rubrica, competencia_input)
         df_extrato["Arquivo Origem"] = arquivo.name
         todos_dados.append(df_extrato)
         
@@ -91,32 +96,32 @@ if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
         df_final = pd.concat(todos_dados, ignore_index=True)
         
         if df_final.empty:
-            st.warning("Nenhum dado foi extraído. O layout do PDF pode utilizar um formato diferente para 'Empr.:' ou 'Base IRRF'.")
+            st.warning("Nenhum dado foi extraído. Certifique-se de que os PDFs contêm os CPFs e o campo 'Base IRRF'.")
         else:
             st.success("Processamento concluído com sucesso!")
             st.dataframe(df_final)
             
-            # Geração Excel
-            output_excel = "extrato_irrf_consolidado.xlsx"
-            df_final.to_excel(output_excel, index=False)
+            # Geração de Planilha (Excel/CSV)
+            output_csv = "extrato_irrf_consolidado.csv"
+            df_final.to_csv(output_csv, index=False, sep=";", encoding="utf-8-sig")
             
-            # Geração TXT utilizando a Base IRRF e o Código da Rubrica informado no campo
+            # Geração do Arquivo TXT formatado com Empresa, CPF, Competência, Rubrica e Base IRRF
             output_txt = "importacao_irrf.txt"
             with open(output_txt, "w", encoding="utf-8") as f:
                 for _, row in df_final.iterrows():
-                    # Formato da linha: Empresa; CPF; Competencia; Codigo_Rubrica; Base_IRRF (ajuste conforme o leiaute do seu sistema)
-                    linha_txt = f"{row['Empresa/ID']};{row['CPF']};{row['Competência']};{row['Código Rubrica']};{row['Base IRRF']}\n"
+                    # Formato da linha do TXT: Cod_Empresa; CPF; Competencia; Cod_Rubrica; Base_IRRF
+                    linha_txt = f"{row['Empresa']};{row['CPF']};{row['Competência']};{row['Código Rubrica']};{row['Base IRRF']}\n"
                     f.write(linha_txt)
 
             col_dl1, col_dl2 = st.columns(2)
             
             with col_dl1:
-                with open(output_excel, "rb") as f:
+                with open(output_csv, "rb") as f:
                     st.download_button(
-                        label="Baixar Planilha Consolidada (Excel)",
+                        label="Baixar Planilha Consolidada (CSV)",
                         data=f,
-                        file_name=output_excel,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        file_name=output_csv,
+                        mime="text/csv"
                     )
                     
             with col_dl2:
