@@ -4,8 +4,76 @@ import pandas as pd
 import pdfplumber
 import streamlit as st
 
+# --- Configuração Inicial da Página ---
+st.set_page_config(
+    page_title="Extrator Inteligente de Base IRRF e INSS",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# --- Estilização CSS: Fundo Escuro + Textos em Verde Esmeralda Neon ---
+st.markdown("""
+    <style>
+    .stApp {
+        background-color: #090d16;
+        color: #00ffcc !important;
+    }
+    h1, h2, h3, h4, h5, h6, p, span, label, div, .stMarkdown, .stText {
+        color: #00ffcc !important;
+        font-family: 'Inter', sans-serif;
+    }
+    input, select, textarea {
+        color: #00ffcc !important;
+        background-color: #111827 !important;
+        border-color: #00ffcc !important;
+    }
+    .stButton>button {
+        border-radius: 12px;
+        font-weight: 700;
+        background: linear-gradient(135deg, #00ffcc 0%, #00b386 100%);
+        color: #090d16 !important;
+        border: none;
+        padding: 0.6rem 1.4rem;
+        box-shadow: 0 4px 15px rgba(0, 255, 204, 0.4);
+        transition: all 0.3s ease;
+        width: 100%;
+    }
+    .stButton>button:hover {
+        background: linear-gradient(135deg, #00b386 100%, #008060 100%);
+        box-shadow: 0 6px 20px rgba(0, 255, 204, 0.6);
+        transform: translateY(-2px);
+    }
+    .custom-card {
+        background-color: #111827;
+        padding: 1.5rem;
+        border-radius: 16px;
+        box-shadow: 0 4px 20px -2px rgba(0, 255, 204, 0.1);
+        border: 1px solid rgba(0, 255, 204, 0.3);
+        margin-bottom: 1rem;
+    }
+    [data-testid="stSidebar"] {
+        background-color: #0d1322;
+        color: #00ffcc !important;
+        border-right: 1px solid rgba(0, 255, 204, 0.2);
+    }
+    [data-testid="stSidebar"] * {
+        color: #00ffcc !important;
+    }
+    [data-testid="stMetricValue"] {
+        color: #00ffcc !important;
+        text-shadow: 0 0 10px rgba(0, 255, 204, 0.5);
+    }
+    [data-testid="stFileUploader"] {
+        background-color: #111827;
+        border: 2px dashed rgba(0, 255, 204, 0.4);
+        border-radius: 12px;
+        padding: 1rem;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 def converter_competencia_aaamm(competencia_str):
-    """Converte MM/AAAA para AAAAMM conforme o leiaute."""
     comp_limpa = re.sub(r'\D', '', competencia_str)
     if '/' in competencia_str:
         partes = competencia_str.split('/')
@@ -18,150 +86,602 @@ def converter_competencia_aaamm(competencia_str):
         return f"{ano}{mes}"
     return comp_limpa.zfill(6)[:6]
 
-def extrair_dados_extrato(caminho_pdf, codigo_empresa="1", codigo_rubrica="999", competencia=""):
-    """
-    Extrai os dados de cada funcionário garantindo flexibilidade na leitura da Base IRRF.
-    """
+def extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, nome_sistema):
     dados_funcionarios = []
-    
     with pdfplumber.open(caminho_pdf) as pdf:
-        texto_completo = ""
-        for pagina in pdf.pages:
-            texto_extraido = pagina.extract_text()
-            if texto_extraido:
-                texto_completo += texto_extraido + "\n"
-
+        texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
+    
     if not texto_completo.strip():
         return pd.DataFrame()
 
-    partes_texto = re.split(r"(?=Empr\.?:?\s*\d+)", texto_completo, flags=re.IGNORECASE)
+    linhas = [l.strip() for l in texto_completo.split("\n") if l.strip()]
+    padrao_valor = re.compile(r"([\d\.]+,\d{2})")
     
-    padrao_emp = re.compile(r"Empr\.?:?\s*(\d+)", re.IGNORECASE)
-    padrao_cpf = re.compile(r"(\d{3}\.\d{3}\.\d{3}-\d{2})")
+    emp_id = "1"
+    nome = "Funcionário Geral"
     
-    padrao_base_irrf = re.compile(
-        r"(?:Base\s*(?:de\s*Cálculo\s*)?(?:do\s*)?IRRF|Base\s*Calc\.?\s*IRRF|IRRF\s*Base)[:\s\n]*([\d\.]+,\d{2})", 
-        re.IGNORECASE
-    )
-
-    for bloco in partes_texto:
-        if not bloco.strip():
+    for idx, linha in enumerate(linhas):
+        if any(termo in linha.upper() for termo in ["TOTAL", "PÁGINA", "CNPJ", "RELATÓRIO", "EMPRESA"]):
             continue
             
-        match_emp = padrao_emp.search(bloco)
-        match_cpf = padrao_cpf.search(bloco)
-        
-        if not match_emp or not match_cpf:
-            continue
+        valores = padrao_valor.findall(linha)
+        if valores:
+            partes_linha = linha.split()
+            if partes_linha and partes_linha[0].isdigit() and len(partes_linha[0]) <= 5:
+                emp_id = partes_linha[0]
+                if len(partes_linha) > 1:
+                    nome = " ".join([p for p in partes_linha[1:] if not padrao_valor.search(p)])
+                    if not nome.strip():
+                        nome = f"Funcionário {emp_id}"
             
-        emp_id = match_emp.group(1).strip()
-        cpf = match_cpf.group(1).strip()
-        
-        match_base = padrao_base_irrf.search(bloco)
-        base_irrf = match_base.group(1).strip() if match_base else "0,00"
-        
-        linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
-        nome = "Funcionário"
-        for linha in linhas:
-            if "Empr" in linha or "Empresa" in linha:
-                txt_limpo = re.sub(r"Empr\.?:?\s*\d+", "", linha, flags=re.IGNORECASE).strip()
-                if len(txt_limpo) > 2:
-                    nome = txt_limpo
-                    break
-
-        if not any(d.get('CPF') == cpf and d.get('Código Empregado') == emp_id for d in dados_funcionarios):
-            dados_funcionarios.append({
-                "Empresa": str(codigo_empresa).strip(),
-                "Código Empregado": emp_id,
-                "Funcionário": nome,
-                "CPF": cpf,
-                "Competência": competencia.strip(),
-                "Base IRRF": base_irrf,
-                "Código Rubrica": str(codigo_rubrica).strip()
-            })
-
+            base_irrf = valores[-1]
+            inss_salario = valores[-2] if len(valores) >= 2 else "0,00"
+            
+            if not any(d.get('Código Empregado') == emp_id and d.get('Base IRRF') == base_irrf for d in dados_funcionarios):
+                dados_funcionarios.append({
+                    "Empresa": str(codigo_empresa).strip(),
+                    "Código Empregado": emp_id,
+                    "Funcionário": nome[:40],
+                    "CPF": f"N/D ({nome_sistema})",
+                    "Competência": competencia.strip(),
+                    "Base IRRF": base_irrf,
+                    "Código Rubrica IRRF": str(codigo_rubrica_irrf).strip(),
+                    "INSS Sobre Salário": inss_salario,
+                    "Código Rubrica INSS": str(codigo_rubrica_inss).strip()
+                })
+                
     return pd.DataFrame(dados_funcionarios)
 
-def gerar_linha_posicional(row):
-    f_fixo = "10"  # Fixo "10"
+def extrair_dados_extrato_exactus(caminho_pdf, codigo_empresa="1", codigo_rubrica_irrf="2000", codigo_rubrica_inss="2001", competencia=""):
+    try:
+        dados_funcionarios = []
+        with pdfplumber.open(caminho_pdf) as pdf:
+            texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
+        if not texto_completo.strip(): 
+            return pd.DataFrame()
+
+        partes_texto = re.split(r"(?=\d{4,5}\.\d{3}\s*-)", texto_completo)
+        padrao_cabecalho = re.compile(r"^(\d{4,5}\.\d{3})\s*-\s*(.+)", re.IGNORECASE)
+        padrao_cpf = re.compile(r"CPF\s*(\d{3}\.\d{3}\.\d{3}-\d{2})", re.IGNORECASE)
+
+        for bloco in partes_texto:
+            if not bloco.strip(): 
+                continue
+            if "TOTAL GERAL" in bloco.upper() or "RESUMO TRIBUTÁRIO" in bloco.upper():
+                continue
+            
+            linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
+            if not linhas:
+                continue
+
+            match_cab = padrao_cabecalho.search(linhas[0])
+            if not match_cab:
+                continue
+
+            emp_id = match_cab.group(1).strip()
+            nome_func = match_cab.group(2).strip()
+
+            match_cpf = padrao_cpf.search(bloco)
+            cpf = match_cpf.group(1).strip() if match_cpf else "N/D (Exactus)"
+
+            base_irrf = "0,00"
+            inss_salario = "0,00"
+            for i, linha in enumerate(linhas):
+                if "IRRF R.M." in linha.upper():
+                    valores_linha = re.findall(r"([\d\.]+,\d{2})", linha)
+                    if valores_linha:
+                        base_irrf = valores_linha[-1]
+                if "INSS" in linha.upper() and "SALÁRIO" in linha.upper():
+                    valores_linha = re.findall(r"([\d\.]+,\d{2})", linha)
+                    if valores_linha:
+                        inss_salario = valores_linha[-1]
+
+            if emp_id and not any(d.get('Código Empregado') == emp_id for d in dados_funcionarios):
+                dados_funcionarios.append({
+                    "Empresa": str(codigo_empresa).strip(),
+                    "Código Empregado": emp_id,
+                    "Funcionário": nome_func[:40],
+                    "CPF": cpf,
+                    "Competência": competencia.strip(),
+                    "Base IRRF": base_irrf,
+                    "Código Rubrica IRRF": str(codigo_rubrica_irrf).strip(),
+                    "INSS Sobre Salário": inss_salario,
+                    "Código Rubrica INSS": str(codigo_rubrica_inss).strip()
+                })
+
+        df = pd.DataFrame(dados_funcionarios)
+        if df.empty:
+            return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Exactus")
+        return df
+    except Exception:
+        return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Exactus")
+
+def extrair_dados_extrato_iob(caminho_pdf, codigo_empresa="1", codigo_rubrica_irrf="2000", codigo_rubrica_inss="2001", competencia=""):
+    try:
+        dados_funcionarios = []
+        with pdfplumber.open(caminho_pdf) as pdf:
+            texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
+        if not texto_completo.strip(): 
+            return pd.DataFrame()
+
+        padrao_func_bloco = re.compile(r"Funcionário:\s*(\d+)\s*-\s*([^\n]+)", re.IGNORECASE)
+        posicoes = list(padrao_func_bloco.finditer(texto_completo))
+        
+        for idx, match in enumerate(posicoes):
+            emp_id = match.group(1).strip()
+            nome_completo = match.group(2).split("Adm:")[0].split("Função:")[0].strip()
+            nome_func = " ".join(nome_completo.split())
+            
+            inicio_bloco = match.start()
+            fim_bloco = posicoes[idx + 1].start() if idx + 1 < len(posicoes) else len(texto_completo)
+            bloco_texto = texto_completo[inicio_bloco:fim_bloco]
+            
+            match_base_irrf = re.search(r"Base\s+Bruta\s+de\s+IRRF\s*:\s*([\d\.]+,\d{2})", bloco_texto, re.IGNORECASE)
+            base_irrf = match_base_irrf.group(1) if match_base_irrf else "0,00"
+
+            match_inss = re.search(r"INSS\s+Sobre\s+Salário\s*:\s*([\d\.]+,\d{2})", bloco_texto, re.IGNORECASE)
+            inss_salario = match_inss.group(1) if match_inss else "0,00"
+            
+            if emp_id and nome_func and not any(d.get('Código Empregado') == emp_id for d in dados_funcionarios):
+                dados_funcionarios.append({
+                    "Empresa": str(codigo_empresa).strip(),
+                    "Código Empregado": emp_id,
+                    "Funcionário": nome_func[:40],
+                    "CPF": "N/D (IOB)",
+                    "Competência": competencia.strip(),
+                    "Base IRRF": base_irrf,
+                    "Código Rubrica IRRF": str(codigo_rubrica_irrf).strip(),
+                    "INSS Sobre Salário": inss_salario,
+                    "Código Rubrica INSS": str(codigo_rubrica_inss).strip()
+                })
+
+        df = pd.DataFrame(dados_funcionarios)
+        if df.empty:
+            return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "IOB")
+        return df
+    except Exception:
+        return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "IOB")
+
+def extrair_dados_extrato_dominio(caminho_pdf, codigo_empresa="1", codigo_rubrica_irrf="2000", codigo_rubrica_inss="2001", competencia=""):
+    try:
+        dados_funcionarios = []
+        with pdfplumber.open(caminho_pdf) as pdf:
+            texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
+        if not texto_completo.strip(): return pd.DataFrame()
+        partes_texto = re.split(r"(?=Empr\.?:?\s*\d+)", texto_completo, flags=re.IGNORECASE)
+        padrao_emp = re.compile(r"Empr\.?:?\s*(\d+)", re.IGNORECASE)
+        padrao_cpf = re.compile(r"(\d{3}\.\d{3}\.\d{3}-\d{2})")
+        padrao_base_irrf = re.compile(r"(?:Base\s*(?:de\s*Cálculo\s*)?(?:do\s*)?IRRF|Base\s*Calc\.?\s*IRRF|IRRF\s*Base)[:\s\n]*([\d\.]+,\d{2})", re.IGNORECASE)
+        padrao_inss = re.compile(r"INSS\s+Sobre\s+Salário[:\s\n]*([\d\.]+,\d{2})", re.IGNORECASE)
+        for bloco in partes_texto:
+            if not bloco.strip(): continue
+            match_emp, match_cpf = padrao_emp.search(bloco), padrao_cpf.search(bloco)
+            if not match_cpf: continue
+            
+            emp_id = match_emp.group(1).strip() if match_emp else "1"
+            cpf = match_cpf.group(1).strip()
+            
+            match_base = padrao_base_irrf.search(bloco)
+            base_irrf = match_base.group(1).strip() if match_base else "0,00"
+
+            match_inss = padrao_inss.search(bloco)
+            inss_salario = match_inss.group(1).strip() if match_inss else "0,00"
+
+            linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
+            nome = "Funcionário"
+            for linha in linhas:
+                if "Empr" in linha or "Empresa" in linha:
+                    txt_limpo = re.sub(r"Empr\.?:?\s*\d+", "", linha, flags=re.IGNORECASE).strip()
+                    if len(txt_limpo) > 2:
+                        nome = txt_limpo
+                        break
+            if not any(d.get('CPF') == cpf and d.get('Código Empregado') == emp_id for d in dados_funcionarios):
+                dados_funcionarios.append({
+                    "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
+                    "Funcionário": nome, "CPF": cpf, "Competência": competencia.strip(),
+                    "Base IRRF": base_irrf, "Código Rubrica IRRF": str(codigo_rubrica_irrf).strip(),
+                    "INSS Sobre Salário": inss_salario, "Código Rubrica INSS": str(codigo_rubrica_inss).strip()
+                })
+        df = pd.DataFrame(dados_funcionarios)
+        if df.empty:
+            return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Domínio")
+        return df
+    except Exception:
+        return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Domínio")
+
+def extrair_dados_extrato_contmatic(caminho_pdf, codigo_empresa="1", codigo_rubrica_irrf="2000", codigo_rubrica_inss="2001", competencia=""):
+    try:
+        dados_funcionarios = []
+        with pdfplumber.open(caminho_pdf) as pdf:
+            texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
+        if not texto_completo.strip(): return pd.DataFrame()
+        partes_texto = re.split(r"(?=Cód:\s*\d+)", texto_completo, flags=re.IGNORECASE)
+        padrao_cod = re.compile(r"Cód:\s*(\d+)", re.IGNORECASE)
+        padrao_base_irrf = re.compile(r"Base\s*I\.R\.R\.F\.?:?[\s\n]*([\d\.]+,\d{2})", re.IGNORECASE)
+        padrao_inss_salario = re.compile(r"INSS\s+Sobre\s+Salário:?[\s\n]*([\d\.]+,\d{2})", re.IGNORECASE)
+        for bloco in partes_texto:
+            if not bloco.strip(): continue
+            match_cod = padrao_cod.search(bloco)
+            if not match_cod: continue
+            
+            emp_id = match_cod.group(1).strip()
+            match_base = padrao_base_irrf.search(bloco)
+            base_irrf = match_base.group(1).strip() if match_base else "0,00"
+
+            match_inss = padrao_inss_salario.search(bloco)
+            inss_salario = match_inss.group(1).strip() if match_inss else "0,00"
+
+            linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
+            nome = "Funcionário"
+            for i, linha in enumerate(linhas):
+                if "Nome:" in linha:
+                    nome = linha.replace("Nome:", "").strip()
+                    break
+                elif "Cód:" in linha and i + 1 < len(linhas):
+                    possivel_nome = linhas[i+1]
+                    if "Função:" in possivel_nome or len(possivel_nome) > 3:
+                        nome = possivel_nome.split("Função:")[0].strip()
+                        break
+            if emp_id:
+                dados_funcionarios.append({
+                    "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
+                    "Funcionário": nome, "CPF": "N/D (Contmatic)", "Competência": competencia.strip(),
+                    "Base IRRF": base_irrf, "Código Rubrica IRRF": str(codigo_rubrica_irrf).strip(),
+                    "INSS Sobre Salário": inss_salario, "Código Rubrica INSS": str(codigo_rubrica_inss).strip()
+                })
+        df = pd.DataFrame(dados_funcionarios)
+        if df.empty:
+            return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Contmatic")
+        return df
+    except Exception:
+        return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Contmatic")
+
+def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubrica_irrf="2000", codigo_rubrica_inss="2001", competencia=""):
+    try:
+        dados_funcionarios = []
+        with pdfplumber.open(caminho_pdf) as pdf:
+            texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
+        if not texto_completo.strip(): return pd.DataFrame()
+        partes_bloco = re.split(r"(?=\b\d{5}\b.*?(\d{3}\.\d{3}\.\d{3}-\d{2}))", texto_completo, flags=re.DOTALL)
+        padrao_empregado_cpf = re.compile(r"\b(\d{5})\b.*?(\d{3}\.\d{3}\.\d{3}-\d{2})")
+        padrao_base_irrf_estrito = re.compile(r"Base\s*IRRF\s*[:\s]*([\d\.]+,\d{2})", re.IGNORECASE)
+        padrao_inss = re.compile(r"INSS\s+Sobre\s+Salário\s*[:\s]*([\d\.]+,\d{2})", re.IGNORECASE)
+        for bloco in partes_bloco:
+            if not bloco.strip(): continue
+            match_emp_cpf = padrao_empregado_cpf.search(bloco)
+            if not match_emp_cpf: continue
+            
+            emp_id = match_emp_cpf.group(1).strip()
+            cpf = match_emp_cpf.group(2).strip()
+            
+            linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
+            nome = "Funcionário"
+            for linha in linhas:
+                if cpf in linha:
+                    resto = linha.replace(cpf, "").strip()
+                    if len(resto) > 2:
+                        nome = resto
+                        break
+            base_irrf = "0,00"
+            match_base = padrao_base_irrf_estrito.search(bloco)
+            if match_base:
+                base_irrf = match_base.group(1).strip()
+
+            inss_salario = "0,00"
+            match_inss = padrao_inss.search(bloco)
+            if match_inss:
+                inss_salario = match_inss.group(1).strip()
+
+            if emp_id and not any(d.get('CPF') == cpf and d.get('Código Empregado') == emp_id for d in dados_funcionarios):
+                dados_funcionarios.append({
+                    "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
+                    "Funcionário": nome, "CPF": cpf, "Competência": competencia.strip(),
+                    "Base IRRF": base_irrf, "Código Rubrica IRRF": str(codigo_rubrica_irrf).strip(),
+                    "INSS Sobre Salário": inss_salario, "Código Rubrica INSS": str(codigo_rubrica_inss).strip()
+                })
+        df = pd.DataFrame(dados_funcionarios)
+        if df.empty:
+            return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Alterdata")
+        return df
+    except Exception:
+        return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Alterdata")
+
+def extrair_dados_extrato_sci(caminho_pdf, codigo_empresa="1", codigo_rubrica_irrf="2000", codigo_rubrica_inss="2001", competencia=""):
+    try:
+        dados_funcionarios = []
+        with pdfplumber.open(caminho_pdf) as pdf:
+            texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
+        if not texto_completo.strip(): 
+            return pd.DataFrame()
+
+        linhas = [l.strip() for l in texto_completo.split("\n") if l.strip()]
+        i = 0
+        while i < len(linhas):
+            linha = linhas[i]
+            if "ADMITIDO EM" in linha.upper():
+                match_func = re.search(r"^(\d+)\s+(.+?)\s+Admitido em", linha, re.IGNORECASE)
+                if match_func:
+                    emp_id = match_func.group(1).strip()
+                    nome_func = match_func.group(2).strip()
+                    nome_func = re.sub(r"\s+\d+\s*\d*$", "", nome_func).strip()
+                    
+                    base_irrf = "0,00"
+                    inss_salario = "0,00"
+                    j = i
+                    while j < len(linhas) and (j == i or "ADMITIDO EM" not in linhas[j].upper()):
+                        linha_atual = linhas[j]
+                        if "IR ->" in linha_atual.upper():
+                            partes_ir = linha_atual.upper().split("IR ->")
+                            if len(partes_ir) > 1:
+                                val_match = re.findall(r"([\d\.]+,\d{2})", partes_ir[1])
+                                if val_match:
+                                    base_irrf = val_match[0]
+                        if "INSS" in linha_atual.upper():
+                            val_match_inss = re.findall(r"([\d\.]+,\d{2})", linha_atual)
+                            if val_match_inss:
+                                inss_salario = val_match_inss[0]
+                        j += 1
+                        
+                    if not any(d.get('Código Empregado') == emp_id for d in dados_funcionarios):
+                        dados_funcionarios.append({
+                            "Empresa": str(codigo_empresa).strip(),
+                            "Código Empregado": emp_id,
+                            "Funcionário": nome_func[:40],
+                            "CPF": "N/D (SCI)",
+                            "Competência": competencia.strip(),
+                            "Base IRRF": base_irrf,
+                            "Código Rubrica IRRF": str(codigo_rubrica_irrf).strip(),
+                            "INSS Sobre Salário": inss_salario,
+                            "Código Rubrica INSS": str(codigo_rubrica_inss).strip()
+                        })
+            i += 1
+
+        df = pd.DataFrame(dados_funcionarios)
+        if df.empty:
+            return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "SCI")
+        return df
+    except Exception:
+        return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "SCI")
+
+def extrair_dados_extrato_prosol(caminho_pdf, codigo_empresa="1", codigo_rubrica_irrf="2000", codigo_rubrica_inss="2001", competencia=""):
+    try:
+        dados_funcionarios = []
+        with pdfplumber.open(caminho_pdf) as pdf:
+            texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
+        if not texto_completo.strip(): return pd.DataFrame()
+        linhas = [l.strip() for l in texto_completo.split("\n") if l.strip()]
+        emp_id, nome, base_irrf, inss_salario = None, "Funcionário", "0,00", "0,00"
+        padrao_codigo_nome = re.compile(r"^(\d+)-([A-ZÀ-Ú\s]+)", re.IGNORECASE)
+        padrao_base_irrf_prosol = re.compile(r"0105\s+BASE\s+DE\s+CALCULO\s+I\.R\.R\.F\.?", re.IGNORECASE)
+        padrao_inss_prosol = re.compile(r"INSS\s+S/\s+SALARIO", re.IGNORECASE)
+        padrao_valor = re.compile(r"([\d\.]+,\d{2})")
+        i = 0
+        while i < len(linhas):
+            linha = linhas[i]
+            match_cod_nome = padrao_codigo_nome.search(linha)
+            if match_cod_nome:
+                emp_id = match_cod_nome.group(1).strip()
+                nome = match_cod_nome.group(2).strip()
+                base_irrf, inss_salario = "0,00", "0,00"
+            if padrao_base_irrf_prosol.search(linha):
+                valores_encontrados = padrao_valor.findall(linha)
+                if valores_encontrados:
+                    base_irrf = valores_encontrados[-1]
+            if padrao_inss_prosol.search(linha):
+                valores_encontrados = padrao_valor.findall(linha)
+                if valores_encontrados:
+                    inss_salario = valores_encontrados[-1]
+            if emp_id and not any(d.get('Código Empregado') == emp_id for d in dados_funcionarios):
+                dados_funcionarios.append({
+                    "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
+                    "Funcionário": nome, "CPF": "N/D (Prosol)", "Competência": competencia.strip(),
+                    "Base IRRF": base_irrf, "Código Rubrica IRRF": str(codigo_rubrica_irrf).strip(),
+                    "INSS Sobre Salário": inss_salario, "Código Rubrica INSS": str(codigo_rubrica_inss).strip()
+                })
+            i += 1
+        df = pd.DataFrame(dados_funcionarios)
+        if df.empty:
+            return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Prosol")
+        return df
+    except Exception:
+        return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Prosol")
+
+def extrair_dados_extrato_questor(caminho_pdf, codigo_empresa="1", codigo_rubrica_irrf="2000", codigo_rubrica_inss="2001", competencia=""):
+    try:
+        dados_funcionarios = []
+        with pdfplumber.open(caminho_pdf) as pdf:
+            texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
+        if not texto_completo.strip(): return pd.DataFrame()
+        partes_texto = re.split(r"(?=Func:\s*\n?\d+)", texto_completo, flags=re.IGNORECASE)
+        padrao_func = re.compile(r"Func:\s*\n?(\d+)\s+([A-ZÀ-Ú\s]+)", re.IGNORECASE)
+        padrao_base_impostos_irrf = re.compile(r"Base\s+Impostos.*?IRRF\s+([\d\.]+,\d{2})", re.IGNORECASE | re.DOTALL)
+        padrao_inss = re.compile(r"INSS\s+Salário\s+([\d\.]+,\d{2})", re.IGNORECASE)
+        for bloco in partes_texto:
+            if not bloco.strip(): continue
+            match_func = padrao_func.search(bloco)
+            if not match_func: continue
+            
+            emp_id = match_func.group(1).strip()
+            nome = match_func.group(2).strip()
+            
+            match_base = padrao_base_impostos_irrf.search(bloco)
+            base_irrf = match_base.group(1).strip() if match_base else "0,00"
+
+            match_inss = padrao_inss.search(bloco)
+            inss_salario = match_inss.group(1).strip() if match_inss else "0,00"
+
+            if emp_id and not any(d.get('Código Empregado') == emp_id for d in dados_funcionarios):
+                dados_funcionarios.append({
+                    "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
+                    "Funcionário": nome, "CPF": "N/D (Questor)", "Competência": competencia.strip(),
+                    "Base IRRF": base_irrf, "Código Rubrica IRRF": str(codigo_rubrica_irrf).strip(),
+                    "INSS Sobre Salário": inss_salario, "Código Rubrica INSS": str(codigo_rubrica_inss).strip()
+                })
+        df = pd.DataFrame(dados_funcionarios)
+        if df.empty:
+            return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Questor")
+        return df
+    except Exception:
+        return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Questor")
+
+def extrair_dados_extrato_cucafresca(caminho_pdf, codigo_empresa="1", codigo_rubrica_irrf="2000", codigo_rubrica_inss="2001", competencia=""):
+    try:
+        dados_funcionarios = []
+        with pdfplumber.open(caminho_pdf) as pdf:
+            texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
+        if not texto_completo.strip(): return pd.DataFrame()
+        partes_texto = re.split(r"(?=\b\d+\s+[A-ZÀ-Ú\s]+\s+\d{4}-\d{2})", texto_completo, flags=re.IGNORECASE)
+        padrao_emp_nome = re.compile(r"(\d+)\s+([A-ZÀ-Ú\s]+?)\s+(\d{4}-\d{2})", re.IGNORECASE)
+        padrao_cpf = re.compile(r"CPF:\s*(\d{3}\.\d{3}\.\d{3}-\d{2})", re.IGNORECASE)
+        for bloco in partes_texto:
+            if not bloco.strip(): continue
+            match_emp_nome = padrao_emp_nome.search(bloco)
+            if not match_emp_nome: continue
+            
+            emp_id = match_emp_nome.group(1).strip()
+            nome = match_emp_nome.group(2).strip()
+            
+            match_cpf = padrao_cpf.search(bloco)
+            cpf = match_cpf.group(1).strip() if match_cpf else "N/D (Cuca Fresca)"
+            base_irrf, inss_salario = "0,00", "0,00"
+            linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
+            for i, linha in enumerate(linhas):
+                if "Base IRRF" in linha:
+                    encontrados = re.findall(r"([\d\.]+,\d{2})", linha)
+                    if encontrados: base_irrf = encontrados[-1]
+                if "INSS" in linha:
+                    encontrados = re.findall(r"([\d\.]+,\d{2})", linha)
+                    if encontrados: inss_salario = encontrados[-1]
+            if emp_id and not any(d.get('Código Empregado') == emp_id and d.get('CPF') == cpf for d in dados_funcionarios):
+                dados_funcionarios.append({
+                    "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
+                    "Funcionário": nome, "CPF": cpf, "Competência": competencia.strip(),
+                    "Base IRRF": base_irrf, "Código Rubrica IRRF": str(codigo_rubrica_irrf).strip(),
+                    "INSS Sobre Salário": inss_salario, "Código Rubrica INSS": str(codigo_rubrica_inss).strip()
+                })
+        df = pd.DataFrame(dados_funcionarios)
+        if df.empty:
+            return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Cuca Fresca")
+        return df
+    except Exception:
+        return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica_irrf, codigo_rubrica_inss, competencia, "Cuca Fresca")
+
+def gerar_linhas_posicionais(row):
+    linhas_geradas = ""
+    f_fixo = "10"
     f_emp = str(row['Código Empregado']).zfill(10)[:10]
     f_comp = converter_competencia_aaamm(row['Competência'])
-    f_rubrica = str(row['Código Rubrica']).zfill(9)[:9]
-    f_proc = "41"  # Tipo de Processo "41"
-    
-    val_limpo = re.sub(r'[^\d]', '', str(row['Base IRRF']))
-    f_valor = val_limpo.zfill(9)[:9]
-    
+    f_proc = "41"
     f_empresa = str(row['Empresa']).zfill(10)[:10]
-    
-    return f"{f_fixo}{f_emp}{f_comp}{f_rubrica}{f_proc}{f_valor}{f_empresa}\n"
 
-# --- Interface Gráfica com Streamlit ---
-st.title("Extrator de Base IRRF - Leiaute de Importação TXT")
-st.write("Faça o upload dos extratos em PDF, configure os parâmetros e gere o arquivo TXT posicional.")
+    # Linha para IRRF
+    f_rubrica_irrf = str(row['Código Rubrica IRRF']).zfill(9)[:9]
+    val_limpo_irrf = re.sub(r'[^\d]', '', str(row['Base IRRF']))
+    f_valor_irrf = val_limpo_irrf.zfill(9)[:9]
+    linhas_geradas += f"{f_fixo}{f_emp}{f_comp}{f_rubrica_irrf}{f_proc}{f_valor_irrf}{f_empresa}\n"
 
-col1, col2, col3 = st.columns(3)
-with col1:
-    codigo_empresa_input = st.text_input("Código da Empresa:", value="1")
-with col2:
-    codigo_rubrica = st.text_input("Código da Rubrica (TXT):", value="2000")
-with col3:
-    competencia_input = st.text_input("Competência (Ex: 06/2026):", value="06/2026")
+    # Linha para INSS Sobre Salário
+    f_rubrica_inss = str(row['Código Rubrica INSS']).zfill(9)[:9]
+    val_limpo_inss = re.sub(r'[^\d]', '', str(row['INSS Sobre Salário']))
+    f_valor_inss = val_limpo_inss.zfill(9)[:9]
+    linhas_geradas += f"{f_fixo}{f_emp}{f_comp}{f_rubrica_inss}{f_proc}{f_valor_inss}{f_empresa}\n"
 
-arquivos_pdf = st.file_uploader("Selecione os arquivos PDF", type=["pdf"], accept_multiple_files=True)
+    return linhas_geradas
 
-if arquivos_pdf and st.button("Processar Extratos e Gerar Arquivos"):
+# --- Sidebar ---
+with st.sidebar:
+    st.markdown("### ⚙️ Painel de Controle")
+    sistema_cliente = st.selectbox(
+        "🏢 Sistema / Leiaute:",
+        ["Questor", "Domínio (Thomson Reuters)", "Contmatic Phoenix", "Alterdata", "SCI Contábil", "Prosol", "Cuca Fresca", "Exactus", "IOB"]
+    )
+    st.markdown("---")
+    codigo_empresa_input = st.text_input("🔢 Código da Empresa:", value="1")
+    codigo_rubrica_irrf = st.text_input("🏷️ Código da Rubrica IRRF (TXT):", value="2000")
+    codigo_rubrica_inss = st.text_input("🏷️ Código da Rubrica INSS (TXT):", value="2001")
+    competencia_input = st.text_input("📅 Competência (MM/AAAA):", value="09/2026")
+
+# --- Interface Principal ---
+st.title("⚡ Extrator Inteligente de Base IRRF e INSS")
+st.markdown("Transforme extratos de folha de pagamento em **layouts TXT posicionais e planilhas de conferência** com inteligência e precisão em segundos.")
+
+st.markdown('<div class="custom-card">', unsafe_allow_html=True)
+st.markdown("### 📂 Upload de Extratos (PDF)")
+arquivos_pdf = st.file_uploader("Arraste ou selecione os arquivos PDF aqui", type=["pdf"], accept_multiple_files=True, label_visibility="collapsed")
+st.markdown('</div>', unsafe_allow_html=True)
+
+if "df_editado" not in st.session_state:
+    st.session_state.df_editado = None
+
+if arquivos_pdf and st.button("🚀 Processar Extratos e Gerar Arquivos"):
     todos_dados = []
-    
-    for arquivo in arquivos_pdf:
-        caminho_temp = os.path.join("temp", arquivo.name)
-        os.makedirs("temp", exist_ok=True)
-        with open(caminho_temp, "wb") as f:
-            f.write(arquivo.getbuffer())
+    with st.spinner("Processando arquivos com inteligência de leiaute... Por favor, aguarde ⏳"):
+        for arquivo in arquivos_pdf:
+            caminho_temp = os.path.join("temp", arquivo.name)
+            os.makedirs("temp", exist_ok=True)
+            with open(caminho_temp, "wb") as f:
+                f.write(arquivo.getbuffer())
+                
+            try:
+                if "Questor" in sistema_cliente:
+                    df_extrato = extrair_dados_extrato_questor(caminho_temp, codigo_empresa_input, codigo_rubrica_irrf, codigo_rubrica_inss, competencia_input)
+                elif "Domínio" in sistema_cliente:
+                    df_extrato = extrair_dados_extrato_dominio(caminho_temp, codigo_empresa_input, codigo_rubrica_irrf, codigo_rubrica_inss, competencia_input)
+                elif "Contmatic" in sistema_cliente:
+                    df_extrato = extrair_dados_extrato_contmatic(caminho_temp, codigo_empresa_input, codigo_rubrica_irrf, codigo_rubrica_inss, competencia_input)
+                elif "Alterdata" in sistema_cliente:
+                    df_extrato = extrair_dados_extrato_alterdata(caminho_temp, codigo_empresa_input, codigo_rubrica_irrf, codigo_rubrica_inss, competencia_input)
+                elif "SCI" in sistema_cliente:
+                    df_extrato = extrair_dados_extrato_sci(caminho_temp, codigo_empresa_input, codigo_rubrica_irrf, codigo_rubrica_inss, competencia_input)
+                elif "Prosol" in sistema_cliente:
+                    df_extrato = extrair_dados_extrato_prosol(caminho_temp, codigo_empresa_input, codigo_rubrica_irrf, codigo_rubrica_inss, competencia_input)
+                elif "Cuca Fresca" in sistema_cliente:
+                    df_extrato = extrair_dados_extrato_cucafresca(caminho_temp, codigo_empresa_input, codigo_rubrica_irrf, codigo_rubrica_inss, competencia_input)
+                elif "Exactus" in sistema_cliente:
+                    df_extrato = extrair_dados_extrato_exactus(caminho_temp, codigo_empresa_input, codigo_rubrica_irrf, codigo_rubrica_inss, competencia_input)
+                elif "IOB" in sistema_cliente:
+                    df_extrato = extrair_dados_extrato_iob(caminho_temp, codigo_empresa_input, codigo_rubrica_irrf, codigo_rubrica_inss, competencia_input)
+                else:
+                    df_extrato = pd.DataFrame()
+            finally:
+                if os.path.exists(caminho_temp):
+                    os.remove(caminho_temp)
+                
+            if not df_extrato.empty:
+                df_extrato["Arquivo Origem"] = arquivo.name
+                todos_dados.append(df_extrato)
             
-        df_extrato = extrair_dados_extrato(caminho_temp, codigo_empresa_input, codigo_rubrica, competencia_input)
-        if not df_extrato.empty:
-            df_extrato["Arquivo Origem"] = arquivo.name
-            todos_dados.append(df_extrato)
-        
-        os.remove(caminho_temp)
-        
     if todos_dados:
-        df_final = pd.concat(todos_dados, ignore_index=True)
-        
-        if df_final.empty:
-            st.warning("Nenhum dado foi extraído. Verifique se o PDF contém os CPFs e o campo 'Base IRRF'.")
+        df_bruto = pd.concat(todos_dados, ignore_index=True)
+        if df_bruto.empty:
+            st.warning("⚠️ Nenhum dado foi extraído. Verifique se o PDF contém texto legível (não escaneado como imagem).")
+            st.session_state.df_editado = None
         else:
-            st.success("Processamento concluído com sucesso!")
-            st.dataframe(df_final)
-            
-            output_csv = "extrato_irrf_consolidado.csv"
-            df_final.to_csv(output_csv, index=False, sep=";", encoding="utf-8-sig")
-            
-            output_txt = "importacao_irrf.txt"
-            with open(output_txt, "w", encoding="utf-8") as f:
-                for _, row in df_final.iterrows():
-                    linha_posicional = gerar_linha_posicional(row)
-                    f.write(linha_posicional)
-
-            col_dl1, col_dl2 = st.columns(2)
-            
-            with col_dl1:
-                with open(output_csv, "rb") as f:
-                    st.download_button(
-                        label="Baixar Planilha de Conferência (CSV)",
-                        data=f,
-                        file_name=output_csv,
-                        mime="text/csv"
-                    )
-                    
-            with col_dl2:
-                with open(output_txt, "r", encoding="utf-8") as f:
-                    st.download_button(
-                        label="Baixar TXT Posicional (Leiaute)",
-                        data=f,
-                        file_name=output_txt,
-                        mime="text/plain"
-                    )
+            st.session_state.df_editado = df_bruto
     else:
-        st.warning("Nenhum dado válido foi encontrado nos arquivos enviados.")
+        st.warning("⚠ Nenhum dado válido foi encontrado nos arquivos enviados. Certifique-se de que os PDFs contêm texto selecionável (e não são imagens digitalizadas/scaneadas).")
+        st.session_state.df_editado = None
+
+if st.session_state.df_editado is not None and not st.session_state.df_editado.empty:
+    st.success(f"🎉 Processamento concluído com sucesso! {len(st.session_state.df_editado)} registros mapeados.")
+    st.markdown("### 📊 Prévia dos Dados Extraídos")
+    st.info("💡 **Dica:** Pode alterar os dados clicando diretamente nas células da tabela abaixo antes de descarregar os ficheiros!")
+    
+    df_final = st.data_editor(st.session_state.df_editado, use_container_width=True, num_rows="dynamic", key="editor_dados")
+    
+    output_csv = "extrato_tributos_consolidado.csv"
+    df_final.to_csv(output_csv, index=False, sep=";", encoding="utf-8-sig")
+    
+    output_txt = "importacao_tributos.txt"
+    with open(output_txt, "w", encoding="utf-8") as f:
+        for _, row in df_final.iterrows():
+            f.write(gerar_linhas_posicionais(row))
+
+    st.markdown("### 📥 Central de Downloads")
+    col_dl1, col_dl2 = st.columns(2)
+    with col_dl1:
+        with open(output_csv, "rb") as f:
+            st.download_button("📥 Descarregar Planilha de Conferência (CSV)", data=f, file_name=output_csv, mime="text/csv")
+    with col_dl2:
+        with open(output_txt, "r", encoding="utf-8") as f:
+            st.download_button("📄 Descarregar TXT Posicional (Leiaute)", data=f, file_name=output_txt, mime="text/plain")
