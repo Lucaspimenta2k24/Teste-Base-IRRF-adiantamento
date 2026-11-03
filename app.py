@@ -708,7 +708,7 @@ if arquivos_pdf and st.button("🚀 Processar Extratos e Gerar Arquivos"):
 if st.session_state.df_editado is not None and not st.session_state.df_editado.empty:
     st.success(f"🎉 Processamento concluído com sucesso! {len(st.session_state.df_editado)} registros mapeados e ajustados.")
     st.markdown("### 📊 Prévia dos Dados Extraídos e Ajustados")
-    st.info("💡 **Dica:** O sistema já calculou o INSS progressivo, comparou com a Dedução Simplificada (R$ 564,80) e determinou a **Base Ajustada** mais vantajosa para todos os leiautes. Pode editar valores diretamente na tabela se necessário!")
+    st.info("💡 **Dica:** O sistema já calculou o INSS progressivo, comparou com a Dedução Simplificada (R$ 607,20) e determinou a **Base Ajustada** mais vantajosa para todos os leiautes. Pode editar valores diretamente na tabela se necessário!")
     
     df_final = st.data_editor(st.session_state.df_editado, use_container_width=True, num_rows="dynamic", key="editor_dados")
     
