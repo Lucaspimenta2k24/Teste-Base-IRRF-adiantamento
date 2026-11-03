@@ -1,11 +1,3 @@
-Aqui está o seu código ajustado e atualizado. Foram implementadas as regras solicitadas diretamente no código fonte:
-
-1. **Tabela de INSS Atualizada e Dedução Simplificada**: Adicionei faixas progressivas do INSS atualizadas e o valor da dedução simplificada mensal do IRRF (R$ 564,80).
-2. **Cálculo Inteligente e Ajuste da Base IRRF (`Base Ajustada`)**: O sistema agora extrai ou calcula o valor do INSS de cada funcionário (ou permite estimar a partir da base/salário), compara o valor do INSS calculado com o valor da dedução simplificada, aplica a opção mais vantajosa (a que resultar em uma dedução maior para o abatimento) e gera a coluna e os valores da **Base Ajustada** para todos os leiautes e para a exportação posicional em TXT.
-
-Segue o código completo atualizado:
-
-```python
 import os
 import re
 import pandas as pd
@@ -92,7 +84,6 @@ def calcular_inss_progressivo(salario_ou_base):
         (4190.83, 0.12, 106.59),
         (8157.41, 0.14, 190.41)
     ]
-    teto_inss = 951.63 # Teto máximo aproximado ou calculado pelo teto da última faixa
     
     if salario_ou_base <= 0:
         return 0.0
@@ -108,7 +99,6 @@ def calcular_inss_progressivo(salario_ou_base):
             inss_total += (salario_ou_base - limite_anterior) * aliquota
             break
         if limite == 8157.41 and salario_ou_base > limite:
-            # Se ultrapassar o teto, aplica o teto da última faixa
             inss_total = 908.86 # Teto prático atualizado do INSS
             break
             
@@ -158,10 +148,8 @@ def aplicar_regra_base_ajustada(df):
     for _, row in df.iterrows():
         base_irrf_val = limpar_valor_float(row.get("Base IRRF", "0,00"))
         
-        # Estima/Calcula o INSS com base na base IRRF ou tenta deduzir
         inss_calculado = calcular_inss_progressivo(base_irrf_val)
         
-        # Compara qual dedução é mais vantajosa (maior dedução para o contribuinte reduz a base)
         if inss_calculado > VALOR_DEDUCAO_SIMPLIFICADA:
             deducao_escolhida = inss_calculado
             tipo = "INSS Calculado"
@@ -637,7 +625,6 @@ def gerar_linha_posicional(row):
     f_comp = converter_competencia_aaamm(row['Competência'])
     f_rubrica = str(row['Código Rubrica']).zfill(9)[:9]
     f_proc = "41"
-    # Utiliza a Base Ajustada calculada para gerar o TXT posicional
     val_limpo = re.sub(r'[^\d]', '', str(row['Base Ajustada']))
     f_valor = val_limpo.zfill(9)[:9]
     f_empresa = str(row['Empresa']).zfill(10)[:10]
@@ -741,5 +728,3 @@ if st.session_state.df_editado is not None and not st.session_state.df_editado.e
     with col_dl2:
         with open(output_txt, "r", encoding="utf-8") as f:
             st.download_button("📄 Descarregar TXT Posicional (Leiaute)", data=f, file_name=output_txt, mime="text/plain")
-
-```
