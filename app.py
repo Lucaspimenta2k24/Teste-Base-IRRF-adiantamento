@@ -389,13 +389,10 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
     try:
         dados_funcionarios = []
         with pdfplumber.open(caminho_pdf) as pdf:
-            texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
-            
             for pagina in pdf.pages:
-                words = pagina.extract_words()
                 text_page = pagina.extract_text() or ""
                 
-                # Divide a página por blocos de CPF
+                # Divide o relatório por blocos delimitados pelo CPF do funcionário
                 partes_bloco = re.split(r"(?=\d{3}\.\d{3}\.\d{3}-\d{2})", text_page)
                 padrao_cpf = re.compile(r"(\d{3}\.\d{3}\.\d{3}-\d{2})")
                 padrao_base_irrf_estrito = re.compile(r"Base\s*IRRF\s*[:\s]*([\d\.]+,\d{2})", re.IGNORECASE)
@@ -412,28 +409,34 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
                     emp_id = "1"
                     nome = "Funcionário"
                     
+                    # Extração robusta do Código do Empregado e do Nome na Alterdata (ex: 00267 JOSE FLORIVAL)
                     for linha in linhas:
                         if cpf in linha:
                             partes_linha = linha.split(cpf)
                             resto_esq = partes_linha[0].strip()
                             resto_dir = partes_linha[1].strip() if len(partes_linha) > 1 else ""
                             
-                            numeros_esq = re.findall(r"\b\d{3,5}\b", resto_esq)
-                            if numeros_esq:
-                                emp_id = numeros_esq[-1]
-                            
+                            # Procura o código do empregado (ex: números de 3 a 5 dígitos como 00267) à esquerda do CPF
+                            match_cod = re.search(r"\b(\d{3,5})\b", resto_esq)
+                            if match_cod:
+                                emp_id = match_cod.group(1).lstrip("0") or "0" # Mantém o número limpo ou completo
+                                # Se preferir com zeros à esquerda originais do PDF:
+                            match_cod_largo = re.findall(r"\b(\d{3,5})\b", resto_esq)
+                            if match_cod_largo:
+                                emp_id = match_cod_largo[-1]
+                                
                             if len(resto_dir) > 2:
-                                nome = resto_dir.split("123105")[0].split("CBO")[0].strip()
+                                nome = resto_dir.split("123105")[0].split("CBO")[0].split("Função")[0].strip()
                             break
                     
                     if nome == "Funcionário" and linhas:
                         for i, linha in enumerate(linhas):
                             if cpf in linha and i > 0:
                                 txt_ant = linhas[i-1]
-                                nums = re.findall(r"\b\d{3,5}\b", txt_ant)
-                                if nums:
-                                    emp_id = nums[-1]
-                                nome = re.sub(r"^\d+[\.\d]*\s+\d+\s*", "", txt_ant).strip()
+                                match_nums = re.findall(r"\b(\d{3,5})\b", txt_ant)
+                                if match_nums:
+                                    emp_id = match_nums[-1]
+                                nome = re.sub(r"^[0-9\.\-\s]+", "", txt_ant).strip()
                                 break
 
                     nome = re.sub(r"^[0-9\.\-\s]+", "", nome).strip()
@@ -448,12 +451,11 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
                     val_inss_alterdata = "0,00"
                     val_irrf_alterdata = "0,00"
 
-                    # Varredura inteligente aprimorada para capturar valores entre parênteses do INSS e IRRF da Alterdata
+                    # Varre as linhas do funcionário para capturar INSS e IRRF removendo parênteses
                     for linha in linhas:
                         linha_up = linha.upper()
                         
                         if "I.N.S.S" in linha_up and "BASE" not in linha_up and "S/FERIAS" not in linha_up:
-                            # Procura especificamente valor entre parênteses ou o último valor da linha
                             match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
                             if match_parenteses:
                                 val_inss_alterdata = match_parenteses.group(1)
