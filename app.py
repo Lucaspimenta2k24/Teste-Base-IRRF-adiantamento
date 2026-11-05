@@ -394,32 +394,37 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
         if not texto_completo.strip():
             return pd.DataFrame()
 
-        # Identifica cada funcionário pelo código de 5 dígitos exatos seguido do CPF
-        padrao_inicio_func = re.compile(r"(\d{5})\s+(\d{3}\.\d{3}\.\d{3}-\d{2})", re.IGNORECASE)
+        # Identifica o departamento, o código do empregado e o CPF no cabeçalho de cada pessoa
+        padrao_inicio_func = re.compile(
+            r"(?m)^[ \t]*\d{3}\.\d{3}\.\d{3}\s+(\d{1,5})\s+"
+            r"(\d{3}\.\d{3}\.\d{3}-\d{2})\s+(.+)$"
+        )
         matches = list(padrao_inicio_func.finditer(texto_completo))
         
         padrao_base_irrf_estrito = re.compile(r"Base\s*IRRF\s*[:\s]*([\d\.]+,\d{2})", re.IGNORECASE)
+        padrao_linha_inss = re.compile(
+            r"\b101\s+I\s*\.\s*N\s*\.\s*S\s*\.\s*S\s*\.?(?!\s*S/FERIAS)",
+            re.IGNORECASE
+        )
+        padrao_linha_irrf = re.compile(
+            r"\b190\s+I\s*\.\s*R\s*\.\s*R\s*\.\s*F\s*\.?",
+            re.IGNORECASE
+        )
+        padrao_valor_parenteses = re.compile(r"\(\s*([\d\.]+,\d{2})\s*\)")
+        padrao_valor_moeda = re.compile(r"[\d\.]+,\d{2}")
 
         for idx, match in enumerate(matches):
             emp_id = match.group(1).strip()
             cpf = match.group(2).strip()
+            resto_cabecalho = match.group(3).strip()
             
             inicio_bloco = match.start()
             fim_bloco = matches[idx + 1].start() if idx + 1 < len(matches) else len(texto_completo)
             bloco = texto_completo[inicio_bloco:fim_bloco]
             
-            linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
-            
-            # Extrai o nome do funcionário limpo na linha de cabeçalho
-            nome = "Funcionário"
-            if linhas:
-                primeira_linha = linhas[0]
-                partes = primeira_linha.split(cpf)
-                if len(partes) > 1 and partes[1].strip():
-                    nome = partes[1].split("123105")[0].split("CBO")[0].split("Função")[0].strip()
-                elif len(linhas) > 1:
-                    nome = linhas[1].split("123105")[0].split("CBO")[0].split("Função")[0].strip()
-            
+            # O nome fica entre o CPF e o código CBO (ou o hífen do empregado sem CBO).
+            nome = re.split(r"\s+(?=\d{6}\b)|\s+-\s+", resto_cabecalho, maxsplit=1)[0].strip()
+            nome = " ".join(nome.split())
             nome = re.sub(r"^[0-9\.\-\s]+", "", nome).strip()
             if not nome:
                 nome = f"Funcionário {emp_id}"
@@ -432,30 +437,41 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
 
             val_inss_alterdata = "0,00"
             val_irrf_alterdata = "0,00"
+            encontrou_inss = False
+            encontrou_irrf = False
 
-            # Varredura linha por linha estrita procurando pelas rubricas 101 (INSS) e 190 (IRRF)
-            for linha in linhas:
+            # No leiaute Alterdata, os valores das rubricas aparecem entre parênteses.
+            # Os parênteses indicam desconto, mas o valor deve ser exportado como positivo.
+            for linha_bruta in bloco.splitlines():
+                linha = " ".join(linha_bruta.split())
+                if not linha:
+                    continue
+
                 linha_up = linha.upper()
-                
-                # INSS (Rubrica 2001) -> Linha contém '101' ou 'I.N.S.S' (ignorando linhas de Base ou Férias)
-                if (re.search(r"\b101\b", linha_up) or "I.N.S.S" in linha_up) and "BASE" not in linha_up and "S/FERIAS" not in linha_up and "DEPENDENTE" not in linha_up:
-                    match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
-                    if match_parenteses:
-                        val_inss_alterdata = match_parenteses.group(1)
-                    else:
-                        valores = re.findall(r"([\d\.]+,\d{2})", linha)
-                        if valores:
-                            val_inss_alterdata = valores[-1]
-                
-                # IRRF (Rubrica 2003) -> Linha contém '190' ou 'I.R.R.F' (ignorando linhas de Base ou Retido)
-                if (re.search(r"\b190\b", linha_up) or "I.R.R.F" in linha_up) and "BASE" not in linha_up and "RETIDO" not in linha_up:
-                    match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
-                    if match_parenteses:
-                        val_irrf_alterdata = match_parenteses.group(1)
-                    else:
-                        valores = re.findall(r"([\d\.]+,\d{2})", linha)
-                        if valores:
-                            val_irrf_alterdata = valores[-1]
+                linha_compacta = re.sub(r"\s+", "", linha_up)
+
+                # Evita capturar as rubricas do resumo geral que pode aparecer
+                # depois do último empregado do relatório.
+                if "RESUMO" in linha_compacta or "VALORESDEINSS/FGTS" in linha_compacta:
+                    break
+
+                # Rubrica 2001: captura somente a linha 101 I.N.S.S.
+                if not encontrou_inss and padrao_linha_inss.search(linha):
+                    valores = padrao_valor_parenteses.findall(linha)
+                    if not valores:
+                        valores = padrao_valor_moeda.findall(linha)
+                    if valores:
+                        val_inss_alterdata = valores[-1]
+                        encontrou_inss = True
+
+                # Rubrica 2003: captura somente a linha 190 I.R.R.F.
+                if not encontrou_irrf and padrao_linha_irrf.search(linha):
+                    valores = padrao_valor_parenteses.findall(linha)
+                    if not valores:
+                        valores = padrao_valor_moeda.findall(linha)
+                    if valores:
+                        val_irrf_alterdata = valores[-1]
+                        encontrou_irrf = True
 
             if cpf and not any(d.get('CPF') == cpf for d in dados_funcionarios):
                 dados_funcionarios.append({
