@@ -86,34 +86,56 @@ def converter_competencia_aaamm(competencia_str):
         return f"{ano}{mes}"
     return comp_limpa.zfill(6)[:6]
 
-def expandir_rubricas_adicionais(df_base, rubrica_adt="855", rubrica_calc="2002"):
+def expandir_rubricas_adicionais(df_base, rubrica_adt="855", rubrica_calc="2002", rubrica_inss_ant="2001", rubrica_irrf_ant="2003"):
     """
-    Expande o DataFrame gerando as linhas adicionais para IRRF Adiantamento (rubrica 855) 
-    e IRRF Calculado (rubrica 2002) com valor zerado para cada funcionário único.
+    Expande o DataFrame gerando as linhas adicionais para:
+    1. IRRF Adiantamento (rubrica 855) -> 0,00
+    2. IRRF Calculado (rubrica 2002) -> 0,00
+    3. INSS Mês Anterior (rubrica 2001) -> Valor extraído (ex: Contmatic) ou 0,00
+    4. IRRF Mês Anterior (rubrica 2003) -> Valor extraído (ex: Contmatic) ou 0,00
     """
     if df_base.empty:
         return df_base
     
     registros_expandidos = []
     
-    # Agrupa por funcionário para garantir que os lançamentos adicionais ocorram por empregado
     for _, row in df_base.iterrows():
-        # 1. Linha original (Base IRRF)
-        registros_expandidos.append(row.to_dict())
+        # 1. Linha principal (Base IRRF - Rubrica do input)
+        row_main = row.copy()
+        registros_expandidos.append(row_main.to_dict())
         
-        # 2. Linha IRRF Adiantamento (Rubrica customizada, ex: 855) com valor 0,00
+        # 2. Linha IRRF Adiantamento (Rubrica 855) com valor 0,00
         row_adt = row.copy()
         row_adt["Código Rubrica"] = str(rubrica_adt).strip()
         row_adt["Base IRRF"] = "0,00"
         registros_expandidos.append(row_adt.to_dict())
         
-        # 3. Linha IRRF Calculado (Rubrica customizada, ex: 2002) com valor 0,00
+        # 3. Linha IRRF Calculado (Rubrica 2002) com valor 0,00
         row_calc = row.copy()
         row_calc["Código Rubrica"] = str(rubrica_calc).strip()
         row_calc["Base IRRF"] = "0,00"
         registros_expandidos.append(row_calc.to_dict())
+
+        # 4. Linha INSS Mês Anterior (Rubrica 2001)
+        row_inss_ant = row.copy()
+        row_inss_ant["Código Rubrica"] = str(rubrica_inss_ant).strip()
+        val_inss_ant = row.get("INSS Mes Anterior Val", "0,00")
+        row_inss_ant["Base IRRF"] = val_inss_ant if pd.notna(val_inss_ant) and str(val_inss_ant).strip() else "0,00"
+        registros_expandidos.append(row_inss_ant.to_dict())
+
+        # 5. Linha IRRF Mês Anterior (Rubrica 2003)
+        row_irrf_ant = row.copy()
+        row_irrf_ant["Código Rubrica"] = str(rubrica_irrf_ant).strip()
+        val_irrf_ant = row.get("IRRF Mes Anterior Val", "0,00")
+        row_irrf_ant["Base IRRF"] = val_irrf_ant if pd.notna(val_irrf_ant) and str(val_irrf_ant).strip() else "0,00"
+        registros_expandidos.append(row_irrf_ant.to_dict())
         
-    return pd.DataFrame(registros_expandidos)
+    df_resultado = pd.DataFrame(registros_expandidos)
+    # Remove colunas auxiliares se existirem
+    cols_auxiliares = ["INSS Mes Anterior Val", "IRRF Mes Anterior Val"]
+    df_resultado = df_resultado.drop(columns=[c for c in cols_auxiliares if c in df_resultado.columns])
+    
+    return df_resultado
 
 def extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, nome_sistema):
     dados_funcionarios = []
@@ -153,7 +175,9 @@ def extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, com
                     "CPF": f"N/D ({nome_sistema})",
                     "Competência": competencia.strip(),
                     "Base IRRF": base_irrf,
-                    "Código Rubrica": str(codigo_rubrica).strip()
+                    "Código Rubrica": str(codigo_rubrica).strip(),
+                    "INSS Mes Anterior Val": "0,00",
+                    "IRRF Mes Anterior Val": "0,00"
                 })
                 
     return pd.DataFrame(dados_funcionarios)
@@ -211,7 +235,9 @@ def extrair_dados_extrato_exactus(caminho_pdf, codigo_empresa="1", codigo_rubric
                     "CPF": cpf,
                     "Competência": competencia.strip(),
                     "Base IRRF": base_irrf,
-                    "Código Rubrica": str(codigo_rubrica).strip()
+                    "Código Rubrica": str(codigo_rubrica).strip(),
+                    "INSS Mes Anterior Val": "0,00",
+                    "IRRF Mes Anterior Val": "0,00"
                 })
 
         df = pd.DataFrame(dados_funcionarios)
@@ -255,7 +281,9 @@ def extrair_dados_extrato_iob(caminho_pdf, codigo_empresa="1", codigo_rubrica="2
                     "CPF": "N/D (IOB)",
                     "Competência": competencia.strip(),
                     "Base IRRF": base_irrf,
-                    "Código Rubrica": str(codigo_rubrica).strip()
+                    "Código Rubrica": str(codigo_rubrica).strip(),
+                    "INSS Mes Anterior Val": "0,00",
+                    "IRRF Mes Anterior Val": "0,00"
                 })
 
         df = pd.DataFrame(dados_funcionarios)
@@ -297,7 +325,8 @@ def extrair_dados_extrato_dominio(caminho_pdf, codigo_empresa="1", codigo_rubric
                 dados_funcionarios.append({
                     "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
                     "Funcionário": nome, "CPF": cpf, "Competência": competencia.strip(),
-                    "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip()
+                    "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip(),
+                    "INSS Mes Anterior Val": "0,00", "IRRF Mes Anterior Val": "0,00"
                 })
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
@@ -315,6 +344,8 @@ def extrair_dados_extrato_contmatic(caminho_pdf, codigo_empresa="1", codigo_rubr
         partes_texto = re.split(r"(?=Cód:\s*\d+)", texto_completo, flags=re.IGNORECASE)
         padrao_cod = re.compile(r"Cód:\s*(\d+)", re.IGNORECASE)
         padrao_base_irrf = re.compile(r"Base\s*I\.R\.R\.F\.?:?[\s\n]*([\d\.]+,\d{2})", re.IGNORECASE)
+        padrao_valor_moeda = re.compile(r"([\d\.]+,\d{2})")
+
         for bloco in partes_texto:
             if not bloco.strip(): continue
             match_cod = padrao_cod.search(bloco)
@@ -325,20 +356,37 @@ def extrair_dados_extrato_contmatic(caminho_pdf, codigo_empresa="1", codigo_rubr
             base_irrf = match_base.group(1).strip() if match_base else "0,00"
             linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
             nome = "Funcionário"
+            
+            val_inss_salario = "0,00"
+            val_irrf_salario = "0,00"
+
             for i, linha in enumerate(linhas):
                 if "Nome:" in linha:
                     nome = linha.replace("Nome:", "").strip()
-                    break
-                elif "Cód:" in linha and i + 1 < len(linhas):
+                elif "Cód:" in linha and i + 1 < len(linhas) and nome == "Funcionário":
                     possivel_nome = linhas[i+1]
                     if "Função:" in possivel_nome or len(possivel_nome) > 3:
                         nome = possivel_nome.split("Função:")[0].strip()
-                        break
+
+                # Regra 3: Captura valor de "INSS sobre Salário" (última coluna)
+                if "INSS SOBRE SALÁRIO" in linha.upper() or "INSS SOBRE SALARIO" in linha.upper():
+                    valores_inss = padrao_valor_moeda.findall(linha)
+                    if valores_inss:
+                        val_inss_salario = valores_inss[-1]
+
+                # Regra 4: Captura valor de "IRRF sobre Salário" (última coluna)
+                if "IRRF SOBRE SALÁRIO" in linha.upper() or "IRRF SOBRE SALARIO" in linha.upper():
+                    valores_irrf = padrao_valor_moeda.findall(linha)
+                    if valores_irrf:
+                        val_irrf_salario = valores_irrf[-1]
+
             if emp_id:
                 dados_funcionarios.append({
                     "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
                     "Funcionário": nome, "CPF": "N/D (Contmatic)", "Competência": competencia.strip(),
-                    "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip()
+                    "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip(),
+                    "INSS Mes Anterior Val": val_inss_salario,
+                    "IRRF Mes Anterior Val": val_irrf_salario
                 })
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
@@ -380,7 +428,8 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
                 dados_funcionarios.append({
                     "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
                     "Funcionário": nome, "CPF": cpf, "Competência": competencia.strip(),
-                    "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip()
+                    "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip(),
+                    "INSS Mes Anterior Val": "0,00", "IRRF Mes Anterior Val": "0,00"
                 })
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
@@ -434,7 +483,9 @@ def extrair_dados_extrato_sci(caminho_pdf, codigo_empresa="1", codigo_rubrica="2
                             "CPF": "N/D (SCI)",
                             "Competência": competencia.strip(),
                             "Base IRRF": base_irrf,
-                            "Código Rubrica": str(codigo_rubrica).strip()
+                            "Código Rubrica": str(codigo_rubrica).strip(),
+                            "INSS Mes Anterior Val": "0,00",
+                            "IRRF Mes Anterior Val": "0,00"
                         })
             i += 1
 
@@ -474,7 +525,8 @@ def extrair_dados_extrato_prosol(caminho_pdf, codigo_empresa="1", codigo_rubrica
                     dados_funcionarios.append({
                         "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
                         "Funcionário": nome, "CPF": "N/D (Prosol)", "Competência": competencia.strip(),
-                        "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip()
+                        "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip(),
+                        "INSS Mes Anterior Val": "0,00", "IRRF Mes Anterior Val": "0,00"
                     })
             i += 1
         df = pd.DataFrame(dados_funcionarios)
@@ -507,7 +559,8 @@ def extrair_dados_extrato_questor(caminho_pdf, codigo_empresa="1", codigo_rubric
                 dados_funcionarios.append({
                     "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
                     "Funcionário": nome, "CPF": "N/D (Questor)", "Competência": competencia.strip(),
-                    "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip()
+                    "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip(),
+                    "INSS Mes Anterior Val": "0,00", "IRRF Mes Anterior Val": "0,00"
                 })
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
@@ -556,7 +609,8 @@ def extrair_dados_extrato_cucafresca(caminho_pdf, codigo_empresa="1", codigo_rub
                 dados_funcionarios.append({
                     "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
                     "Funcionário": nome, "CPF": cpf, "Competência": competencia.strip(),
-                    "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip()
+                    "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip(),
+                    "INSS Mes Anterior Val": "0,00", "IRRF Mes Anterior Val": "0,00"
                 })
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
@@ -591,6 +645,8 @@ with st.sidebar:
     st.markdown("### 📋 Parâmetros Adicionais")
     rubrica_adt_input = st.text_input("🏷️ Rubrica IRRF Adiantamento:", value="855")
     rubrica_calc_input = st.text_input("🏷️ Rubrica IRRF Calculado:", value="2002")
+    rubrica_inss_ant_input = st.text_input("🏷️ Rubrica INSS Mês Anterior:", value="2001")
+    rubrica_irrf_ant_input = st.text_input("🏷️ Rubrica IRRF Mês Anterior:", value="2003")
     
     competencia_input = st.text_input("📅 Competência (MM/AAAA):", value="09/2026")
 
@@ -651,8 +707,14 @@ if arquivos_pdf and st.button("🚀 Processar Extratos e Gerar Arquivos"):
             st.warning("⚠️ Nenhum dado foi extraído. Verifique se o PDF contém texto legível (não escaneado como imagem).")
             st.session_state.df_editado = None
         else:
-            # Aplica a expansão das rubricas adicionais (Adiantamento 855 e Calculado 2002) para todos os leiautes
-            df_expandido = expandir_rubricas_adicionais(df_bruto, rubrica_adt_input, rubrica_calc_input)
+            # Aplica a expansão das rubricas adicionais (Adiantamento, Calculado, INSS Mês Ant. e IRRF Mês Ant.)
+            df_expandido = expandir_rubricas_adicionais(
+                df_bruto, 
+                rubrica_adt=rubrica_adt_input, 
+                rubrica_calc=rubrica_calc_input,
+                rubrica_inss_ant=rubrica_inss_ant_input,
+                rubrica_irrf_ant=rubrica_irrf_ant_input
+            )
             st.session_state.df_editado = df_expandido
     else:
         st.warning("⚠ Nenhum dado válido foi encontrado nos arquivos enviados. Certifique-se de que os PDFs contêm texto selecionável (e não são imagens digitalizadas/scaneadas).")
@@ -660,7 +722,7 @@ if arquivos_pdf and st.button("🚀 Processar Extratos e Gerar Arquivos"):
 
 # Exibição da tabela e central de downloads baseada no session_state
 if st.session_state.df_editado is not None and not st.session_state.df_editado.empty:
-    st.success(f"🎉 Processamento concluído com sucesso! {len(st.session_state.df_editado)} registros mapeados (incluindo rubricas de adiantamento e cálculo).")
+    st.success(f"🎉 Processamento concluído com sucesso! {len(st.session_state.df_editado)} registros mapeados (incluindo rubricas adicionais 855, 2002, 2001 e 2003).")
     st.markdown("### 📊 Prévia dos Dados Extraídos")
     st.info("💡 **Dica:** Pode alterar o **Código Empregado** ou qualquer outra informação clicando diretamente nas células da tabela abaixo antes de descarregar os ficheiros!")
     
