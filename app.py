@@ -109,14 +109,14 @@ def expandir_rubricas_adicionais(df_base, rubrica_adt="855", rubrica_calc="2002"
         row_calc["Base IRRF"] = "0,00"
         registros_expandidos.append(row_calc.to_dict())
 
-        # 4. Linha INSS Mês Anterior (Rubrica 2001)
+        # 4. Linha INSS Mês Anterior (Rubrica 2001) - Traz valor extraído do extrato
         row_inss_ant = row.copy()
         row_inss_ant["Código Rubrica"] = str(rubrica_inss_ant).strip()
         val_inss_ant = row.get("INSS Mes Anterior Val", "0,00")
         row_inss_ant["Base IRRF"] = val_inss_ant if pd.notna(val_inss_ant) and str(val_inss_ant).strip() else "0,00"
         registros_expandidos.append(row_inss_ant.to_dict())
 
-        # 5. Linha IRRF Mês Anterior (Rubrica 2003)
+        # 5. Linha IRRF Mês Anterior (Rubrica 2003) - Traz valor extraído do extrato
         row_irrf_ant = row.copy()
         row_irrf_ant["Código Rubrica"] = str(rubrica_irrf_ant).strip()
         val_irrf_ant = row.get("IRRF Mes Anterior Val", "0,00")
@@ -422,37 +422,33 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
             val_inss_alterdata = "0,00"
             val_irrf_alterdata = "0,00"
 
-            # Varredura inteligente de linhas do bloco para capturar INSS e IRRF da Alterdata de forma robusta
-            for i, linha in enumerate(linhas):
+            # Varredura otimizada para capturar I.N.S.S e I.R.R.F. baseada no layout Alterdata
+            for linha in linhas:
                 linha_up = linha.upper()
                 
-                # Identifica a linha de INSS (ex: "I.N.S.S" ou "INSS")
-                if ("I.N.S.S" in linha_up or "INSS" in linha_up) and "BASE" not in linha_up:
+                # Procura pela linha do I.N.S.S (ex: contém "I.N.S.S" ou "101 I.N.S.S")
+                if "I.N.S.S" in linha_up and "BASE" not in linha_up:
                     valores_linha = padrao_valor_moeda.findall(linha)
                     if valores_linha:
+                        # Pega o último valor da linha (que corresponde ao valor entre parênteses da última coluna)
                         val_inss_alterdata = valores_linha[-1]
-                    elif i + 1 < len(linhas):
-                        # Caso o valor esteja na linha logo abaixo
-                        valores_proximos = padrao_valor_moeda.findall(linhas[i + 1])
-                        if valores_proximos:
-                            val_inss_alterdata = valores_proximos[-1]
                 
-                # Identifica a linha de IRRF (ex: "I.R.R.F." ou "IRRF")
-                if ("I.R.R.F" in linha_up or "IRRF" in linha_up) and "BASE" not in linha_up:
+                # Procura pela linha do I.R.R.F. (ex: contém "I.R.R.F." ou "190 I.R.R.F.")
+                if "I.R.R.F" in linha_up and "BASE" not in linha_up:
                     valores_linha = padrao_valor_moeda.findall(linha)
                     if valores_linha:
+                        # Pega o último valor da linha (ex: 3.912,78 no caso do José Florival)
                         val_irrf_alterdata = valores_linha[-1]
-                    elif i + 1 < len(linhas):
-                        # Caso o valor esteja na linha logo abaixo
-                        valores_proximos = padrao_valor_moeda.findall(linhas[i + 1])
-                        if valores_proximos:
-                            val_irrf_alterdata = valores_proximos[-1]
 
             if emp_id and not any(d.get('CPF') == cpf and d.get('Código Empregado') == emp_id for d in dados_funcionarios):
                 dados_funcionarios.append({
-                    "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
-                    "Funcionário": nome, "CPF": cpf, "Competência": competencia.strip(),
-                    "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip(),
+                    "Empresa": str(codigo_empresa).strip(), 
+                    "Código Empregado": emp_id,
+                    "Funcionário": nome, 
+                    "CPF": cpf, 
+                    "Competência": competencia.strip(),
+                    "Base IRRF": base_irrf, 
+                    "Código Rubrica": str(codigo_rubrica).strip(),
                     "INSS Mes Anterior Val": val_inss_alterdata,
                     "IRRF Mes Anterior Val": val_irrf_alterdata
                 })
@@ -673,7 +669,7 @@ with st.sidebar:
     rubrica_inss_ant_input = st.text_input("🏷️ Rubrica INSS Mês Anterior:", value="2001")
     rubrica_irrf_ant_input = st.text_input("🏷️ Rubrica IRRF Mês Anterior:", value="2003")
     
-    competencia_input = st.text_input("📅 Competência (MM/AAAA):", value="09/2026")
+    competencia_input = st.text_input("📅 Competência (MM/AAAA):", value="05/2026")
 
 # --- Interface Principal ---
 st.title("⚡ Extrator Inteligente de Base IRRF")
