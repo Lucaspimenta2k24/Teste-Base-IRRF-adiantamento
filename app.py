@@ -429,20 +429,22 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
             val_inss_alterdata = "0,00"
             val_irrf_alterdata = "0,00"
 
-            # Regras 3 e 4: Busca "I.N.S.S" e "I.R.R.F." na Alterdata obtendo o valor da última coluna
+            # Varre as linhas do bloco do funcionário para capturar INSS e IRRF da Alterdata com precisão nas últimas colunas
             for linha in linhas:
                 linha_up = linha.upper()
-                if "I.N.S.S" in linha_up or "INSS" in linha_up:
+                
+                # Procura por linhas que contenham I.N.S.S ou INSS (mas sem ignorar se for o valor líquido/desconto do mês anterior)
+                if ("I.N.S.S" in linha_up or "INSS" in linha_up) and "BASE" not in linha_up:
                     valores_inss = padrao_valor_moeda.findall(linha)
                     if valores_inss:
                         val_inss_alterdata = valores_inss[-1]
                 
-                if "I.R.R.F" in linha_up or "IRRF" in linha_up:
-                    # Evita confundir com a Base IRRF já capturada acima se estiver em outra linha
-                    if "BASE" not in linha_up:
-                        valores_irrf = padrao_valor_moeda.findall(linha)
-                        if valores_irrf:
-                            val_irrf_alterdata = valores_irrf[-1]
+                # Procura por linhas que contenham I.R.R.F ou IRRF (excluindo a linha de Base de cálculo do IRRF já tratada)
+                if ("I.R.R.F" in linha_up or "IRRF" in linha_up) and "BASE" not in linha_up:
+                    valores_irrf = padrao_valor_moeda.findall(linha)
+                    if valores_irrf:
+                        # Se houver mais de um valor na linha (ex: código, alíquota, valor), pega o último valor correspondente à última coluna
+                        val_irrf_alterdata = valores_irrf[-1]
 
             if emp_id and not any(d.get('CPF') == cpf and d.get('Código Empregado') == emp_id for d in dados_funcionarios):
                 dados_funcionarios.append({
