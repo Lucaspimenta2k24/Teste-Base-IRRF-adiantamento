@@ -389,109 +389,88 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
     try:
         dados_funcionarios = []
         with pdfplumber.open(caminho_pdf) as pdf:
-            for pagina in pdf.pages:
-                text_page = pagina.extract_text() or ""
+            texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
+            
+        if not texto_completo.strip():
+            return pd.DataFrame()
+
+        # Cada funcionário na Alterdata inicia com um código de 5 dígitos exatos seguido do CPF (ex: 00206 968.225.701-87)
+        padrao_inicio_func = re.compile(r"(\d{5})\s+(\d{3}\.\d{3}\.\d{3}-\d{2})", re.IGNORECASE)
+        matches = list(padrao_inicio_func.finditer(texto_completo))
+        
+        padrao_base_irrf_estrito = re.compile(r"Base\s*IRRF\s*[:\s]*([\d\.]+,\d{2})", re.IGNORECASE)
+        padrao_valor_moeda = re.compile(r"([\d\.]+,\d{2})")
+
+        for idx, match in enumerate(matches):
+            emp_id = match.group(1).strip()
+            cpf = match.group(2).strip()
+            
+            inicio_bloco = match.start()
+            fim_bloco = matches[idx + 1].start() if idx + 1 < len(matches) else len(texto_completo)
+            bloco = texto_completo[inicio_bloco:fim_bloco]
+            
+            linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
+            
+            # Extrai o nome do funcionário limpo após o CPF na linha de cabeçalho
+            nome = "Funcionário"
+            if linhas:
+                primeira_linha = linhas[0]
+                partes = primeira_linha.split(cpf)
+                if len(partes) > 1 and partes[1].strip():
+                    nome = partes[1].split("123105")[0].split("CBO")[0].split("Função")[0].strip()
+                elif len(linhas) > 1:
+                    nome = linhas[1].split("123105")[0].split("CBO")[0].split("Função")[0].strip()
+            
+            nome = re.sub(r"^[0-9\.\-\s]+", "", nome).strip()
+            if not nome:
+                nome = f"Funcionário {emp_id}"
+
+            # Extração da Base de IRRF
+            base_irrf = "0,00"
+            match_base = padrao_base_irrf_estrito.search(bloco)
+            if match_base:
+                base_irrf = match_base.group(1).strip()
+
+            val_inss_alterdata = "0,00"
+            val_irrf_alterdata = "0,00"
+
+            # Varre as linhas do bloco para capturar INSS (Rubrica 2001) e IRRF (Rubrica 2003) ignorando os parênteses
+            for linha in linhas:
+                linha_up = linha.upper()
                 
-                # Divide o relatório por blocos delimitados pelo CPF do funcionário
-                partes_bloco = re.split(r"(?=\d{3}\.\d{3}\.\d{3}-\d{2})", text_page)
-                padrao_cpf = re.compile(r"(\d{3}\.\d{3}\.\d{3}-\d{2})")
-                padrao_base_irrf_estrito = re.compile(r"Base\s*IRRF\s*[:\s]*([\d\.]+,\d{2})", re.IGNORECASE)
-                padrao_valor_moeda = re.compile(r"([\d\.]+,\d{2})")
+                # INSS (Rubrica 2001) -> Linha contendo 101 ou I.N.S.S
+                if ("101" in linha_up or "I.N.S.S" in linha_up) and "BASE" not in linha_up and "S/FERIAS" not in linha_up and "DEPENDENTE" not in linha_up:
+                    match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
+                    if match_parenteses:
+                        val_inss_alterdata = match_parenteses.group(1)
+                    else:
+                        valores = padrao_valor_moeda.findall(linha)
+                        if valores:
+                            val_inss_alterdata = valores[-1]
+                
+                # IRRF (Rubrica 2003) -> Linha contendo 190 ou I.R.R.F
+                if ("190" in linha_up or "I.R.R.F" in linha_up) and "BASE" not in linha_up and "RETIDO" not in linha_up:
+                    match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
+                    if match_parenteses:
+                        val_irrf_alterdata = match_parenteses.group(1)
+                    else:
+                        valores = padrao_valor_moeda.findall(linha)
+                        if valores:
+                            val_irrf_alterdata = valores[-1]
 
-                for bloco in partes_bloco:
-                    if not bloco.strip(): continue
-                    match_cpf = padrao_cpf.search(bloco)
-                    if not match_cpf: continue
-                    
-                    cpf = match_cpf.group(1).strip()
-                    linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
-                    
-                    emp_id = "1"
-                    nome = "Funcionário"
-                    
-                    # Extração precisa do Código do Empregado e do Nome no relatório da Alterdata
-                    for linha in linhas:
-                        if cpf in linha:
-                            partes_linha = linha.split(cpf)
-                            resto_esq = partes_linha[0].strip()
-                            resto_dir = partes_linha[1].strip() if len(partes_linha) > 1 else ""
-                            
-                            # Captura o código correto do empregado à esquerda do CPF (ex: 00267)
-                            match_cod_largo = re.findall(r"\b(\d{3,5})\b", resto_esq)
-                            if match_cod_largo:
-                                emp_id = match_cod_largo[-1]
-                                
-                            if len(resto_dir) > 2:
-                                nome = resto_dir.split("123105")[0].split("CBO")[0].split("Função")[0].strip()
-                            break
-                    
-                    if nome == "Funcionário" and linhas:
-                        for i, linha in enumerate(linhas):
-                            if cpf in linha and i > 0:
-                                txt_ant = linhas[i-1]
-                                match_nums = re.findall(r"\b(\d{3,5})\b", txt_ant)
-                                if match_nums:
-                                    emp_id = match_nums[-1]
-                                nome = re.sub(r"^[0-9\.\-\s]+", "", txt_ant).strip()
-                                break
-
-                    if emp_id == "1":
-                        for linha in linhas:
-                            match_bloco_id = re.search(r"\b(00\d{3})\b", linha)
-                            if match_bloco_id:
-                                emp_id = match_bloco_id.group(1)
-                                break
-
-                    nome = re.sub(r"^[0-9\.\-\s]+", "", nome).strip()
-                    if not nome:
-                        nome = f"Funcionário {emp_id}"
-
-                    base_irrf = "0,00"
-                    match_base = padrao_base_irrf_estrito.search(bloco)
-                    if match_base:
-                        base_irrf = match_base.group(1).strip()
-
-                    val_inss_alterdata = "0,00"
-                    val_irrf_alterdata = "0,00"
-
-                    # Varre rigorosamente as linhas do bloco para capturar INSS (101) e IRRF (190) ignorando parênteses
-                    for linha in linhas:
-                        linha_up = linha.upper()
-                        
-                        # Procura a linha de INSS do empregado
-                        if ("101" in linha_up or "I.N.S.S" in linha_up) and "BASE" not in linha_up and "S/FERIAS" not in linha_up and "DEPENDENTE" not in linha_up:
-                            # Tenta extrair valor entre parênteses (ex: (988,07))
-                            match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
-                            if match_parenteses:
-                                val_inss_alterdata = match_parenteses.group(1)
-                            else:
-                                valores = padrao_valor_moeda.findall(linha)
-                                if valores:
-                                    val_inss_alterdata = valores[-1]
-                        
-                        # Procura a linha de IRRF do empregado
-                        if ("190" in linha_up or "I.R.R.F" in linha_up) and "BASE" not in linha_up and "RETIDO" not in linha_up:
-                            match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
-                            if match_parenteses:
-                                val_irrf_alterdata = match_parenteses.group(1)
-                            else:
-                                valores = padrao_valor_moeda.findall(linha)
-                                if valores:
-                                    val_irrf_alterdata = valores[-1]
-
-                    if cpf and not any(d.get('CPF') == cpf for d in dados_funcionarios):
-                        dados_funcionarios.append({
-                            "Empresa": str(codigo_empresa).strip(), 
-                            "Código Empregado": emp_id,
-                            "Funcionário": nome[:40], 
-                            "CPF": cpf, 
-                            "Competência": competencia.strip(),
-                            "Base IRRF": base_irrf, 
-                            "Código Rubrica": str(codigo_rubrica).strip(),
-                            "INSS Mes Anterior Val": val_inss_alterdata,
-                            "IRRF Mes Anterior Val": val_irrf_alterdata
-                        })
-                        
+            if cpf and not any(d.get('CPF') == cpf for d in dados_funcionarios):
+                dados_funcionarios.append({
+                    "Empresa": str(codigo_empresa).strip(), 
+                    "Código Empregado": emp_id,
+                    "Funcionário": nome[:40], 
+                    "CPF": cpf, 
+                    "Competência": competencia.strip(),
+                    "Base IRRF": base_irrf, 
+                    "Código Rubrica": str(codigo_rubrica).strip(),
+                    "INSS Mes Anterior Val": val_inss_alterdata,
+                    "IRRF Mes Anterior Val": val_irrf_alterdata
+                })
+                
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
             return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Alterdata")
