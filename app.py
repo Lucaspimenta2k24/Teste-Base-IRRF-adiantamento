@@ -73,37 +73,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- Constantes de Parâmetros Fiscais (INSS e Dedução Simplificada Atualizada) ---
-VALOR_DEDUCAO_SIMPLIFICADA = 607.20  # Valor atualizado para 2026
-
-def calcular_inss_progressivo(salario_ou_base):
-    """Calcula o INSS progressivo com base nas faixas vigentes."""
-    faixas = [
-        (1518.00, 0.075, 0.0),
-        (2793.88, 0.09, 22.77),
-        (4190.83, 0.12, 106.59),
-        (8157.41, 0.14, 190.41)
-    ]
-    
-    if salario_ou_base <= 0:
-        return 0.0
-        
-    inss_total = 0.0
-    limite_anterior = 0.0
-    
-    for limite, aliquota, parcela_deduzir in faixas:
-        if salario_ou_base > limite:
-            inss_total += (limite - limite_anterior) * aliquota
-            limite_anterior = limite
-        else:
-            inss_total += (salario_ou_base - limite_anterior) * aliquota
-            break
-        if limite == 8157.41 and salario_ou_base > limite:
-            inss_total = 908.86 # Teto prático atualizado do INSS
-            break
-            
-    return round(min(inss_total, 951.63), 2)
-
 def converter_competencia_aaamm(competencia_str):
     comp_limpa = re.sub(r'\D', '', competencia_str)
     if '/' in competencia_str:
@@ -117,56 +86,34 @@ def converter_competencia_aaamm(competencia_str):
         return f"{ano}{mes}"
     return comp_limpa.zfill(6)[:6]
 
-def limpar_valor_float(str_valor):
-    if pd.isna(str_valor):
-        return 0.0
-    val_limpo = str(str_valor).replace("R$", "").strip()
-    if "," in val_limpo and "." in val_limpo:
-        if val_limpo.find(".") < val_limpo.find(","):
-            val_limpo = val_limpo.replace(".", "").replace(",", ".")
-        else:
-            val_limpo = val_limpo.replace(",", "")
-    else:
-        val_limpo = val_limpo.replace(",", ".")
-    try:
-        return float(val_limpo)
-    except ValueError:
-        return 0.0
-
-def formatar_valor_br(valor_float):
-    return f"{valor_float:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-
-def aplicar_regra_base_ajustada(df):
-    """Aplica a regra de comparação entre INSS Calculado e Dedução Simplificada para cada registro."""
-    if df.empty:
-        return df
+def expandir_rubricas_adicionais(df_base, rubrica_adt="855", rubrica_calc="2002"):
+    """
+    Expande o DataFrame gerando as linhas adicionais para IRRF Adiantamento (rubrica 855) 
+    e IRRF Calculado (rubrica 2002) com valor zerado para cada funcionário único.
+    """
+    if df_base.empty:
+        return df_base
     
-    bases_ajustadas = []
-    inss_utilizados = []
-    tipos_deducao = []
+    registros_expandidos = []
     
-    for _, row in df.iterrows():
-        base_irrf_val = limpar_valor_float(row.get("Base IRRF", "0,00"))
+    # Agrupa por funcionário para garantir que os lançamentos adicionais ocorram por empregado
+    for _, row in df_base.iterrows():
+        # 1. Linha original (Base IRRF)
+        registros_expandidos.append(row.to_dict())
         
-        inss_calculado = calcular_inss_progressivo(base_irrf_val)
+        # 2. Linha IRRF Adiantamento (Rubrica customizada, ex: 855) com valor 0,00
+        row_adt = row.copy()
+        row_adt["Código Rubrica"] = str(rubrica_adt).strip()
+        row_adt["Base IRRF"] = "0,00"
+        registros_expandidos.append(row_adt.to_dict())
         
-        if inss_calculado > VALOR_DEDUCAO_SIMPLIFICADA:
-            deducao_escolhida = inss_calculado
-            tipo = "INSS Calculado"
-        else:
-            deducao_escolhida = VALOR_DEDUCAO_SIMPLIFICADA
-            tipo = "Dedução Simplificada"
-            
-        base_ajustada = max(0.0, base_irrf_val - deducao_escolhida)
+        # 3. Linha IRRF Calculado (Rubrica customizada, ex: 2002) com valor 0,00
+        row_calc = row.copy()
+        row_calc["Código Rubrica"] = str(rubrica_calc).strip()
+        row_calc["Base IRRF"] = "0,00"
+        registros_expandidos.append(row_calc.to_dict())
         
-        bases_ajustadas.append(formatar_valor_br(base_ajustada))
-        inss_utilizados.append(formatar_valor_br(deducao_escolhida))
-        tipos_deducao.append(tipo)
-        
-    df["INSS / Dedução Aplicada"] = inss_utilizados
-    df["Tipo Dedução"] = tipos_deducao
-    df["Base Ajustada"] = bases_ajustadas
-    return df
+    return pd.DataFrame(registros_expandidos)
 
 def extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, nome_sistema):
     dados_funcionarios = []
@@ -209,8 +156,7 @@ def extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, com
                     "Código Rubrica": str(codigo_rubrica).strip()
                 })
                 
-    df = pd.DataFrame(dados_funcionarios)
-    return aplicar_regra_base_ajustada(df)
+    return pd.DataFrame(dados_funcionarios)
 
 def extrair_dados_extrato_exactus(caminho_pdf, codigo_empresa="1", codigo_rubrica="2000", competencia=""):
     try:
@@ -271,7 +217,7 @@ def extrair_dados_extrato_exactus(caminho_pdf, codigo_empresa="1", codigo_rubric
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
             return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Exactus")
-        return aplicar_regra_base_ajustada(df)
+        return df
     except Exception:
         return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Exactus")
 
@@ -315,7 +261,7 @@ def extrair_dados_extrato_iob(caminho_pdf, codigo_empresa="1", codigo_rubrica="2
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
             return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "IOB")
-        return aplicar_regra_base_ajustada(df)
+        return df
     except Exception:
         return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "IOB")
 
@@ -356,7 +302,7 @@ def extrair_dados_extrato_dominio(caminho_pdf, codigo_empresa="1", codigo_rubric
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
             return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Domínio")
-        return aplicar_regra_base_ajustada(df)
+        return df
     except Exception:
         return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Domínio")
 
@@ -397,7 +343,7 @@ def extrair_dados_extrato_contmatic(caminho_pdf, codigo_empresa="1", codigo_rubr
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
             return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Contmatic")
-        return aplicar_regra_base_ajustada(df)
+        return df
     except Exception:
         return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Contmatic")
 
@@ -439,7 +385,7 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
             return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Alterdata")
-        return aplicar_regra_base_ajustada(df)
+        return df
     except Exception:
         return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Alterdata")
 
@@ -495,7 +441,7 @@ def extrair_dados_extrato_sci(caminho_pdf, codigo_empresa="1", codigo_rubrica="2
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
             return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "SCI")
-        return aplicar_regra_base_ajustada(df)
+        return df
     except Exception:
         return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "SCI")
 
@@ -534,7 +480,7 @@ def extrair_dados_extrato_prosol(caminho_pdf, codigo_empresa="1", codigo_rubrica
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
             return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Prosol")
-        return aplicar_regra_base_ajustada(df)
+        return df
     except Exception:
         return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Prosol")
 
@@ -566,7 +512,7 @@ def extrair_dados_extrato_questor(caminho_pdf, codigo_empresa="1", codigo_rubric
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
             return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Questor")
-        return aplicar_regra_base_ajustada(df)
+        return df
     except Exception:
         return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Questor")
 
@@ -615,7 +561,7 @@ def extrair_dados_extrato_cucafresca(caminho_pdf, codigo_empresa="1", codigo_rub
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
             return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Cuca Fresca")
-        return aplicar_regra_base_ajustada(df)
+        return df
     except Exception:
         return extrator_fallback_universal(caminho_pdf, codigo_empresa, codigo_rubrica, competencia, "Cuca Fresca")
 
@@ -625,7 +571,7 @@ def gerar_linha_posicional(row):
     f_comp = converter_competencia_aaamm(row['Competência'])
     f_rubrica = str(row['Código Rubrica']).zfill(9)[:9]
     f_proc = "41"
-    val_limpo = re.sub(r'[^\d]', '', str(row['Base Ajustada']))
+    val_limpo = re.sub(r'[^\d]', '', str(row['Base IRRF']))
     f_valor = val_limpo.zfill(9)[:9]
     f_empresa = str(row['Empresa']).zfill(10)[:10]
     return f"{f_fixo}{f_emp}{f_comp}{f_rubrica}{f_proc}{f_valor}{f_empresa}\n"
@@ -639,7 +585,13 @@ with st.sidebar:
     )
     st.markdown("---")
     codigo_empresa_input = st.text_input("🔢 Código da Empresa:", value="1")
-    codigo_rubrica = st.text_input("🏷️ Código da Rubrica (TXT):", value="2000")
+    codigo_rubrica = st.text_input("🏷️ Código da Rubrica (Base IRRF):", value="2000")
+    
+    st.markdown("---")
+    st.markdown("### 📋 Parâmetros Adicionais")
+    rubrica_adt_input = st.text_input("🏷️ Rubrica IRRF Adiantamento:", value="855")
+    rubrica_calc_input = st.text_input("🏷️ Rubrica IRRF Calculado:", value="2002")
+    
     competencia_input = st.text_input("📅 Competência (MM/AAAA):", value="09/2026")
 
 # --- Interface Principal ---
@@ -657,7 +609,7 @@ if "df_editado" not in st.session_state:
 
 if arquivos_pdf and st.button("🚀 Processar Extratos e Gerar Arquivos"):
     todos_dados = []
-    with st.spinner("Processando arquivos com inteligência de leiaute e cálculo de INSS/Dedução... Por favor, aguarde ⏳"):
+    with st.spinner("Processando arquivos com inteligência de leiaute... Por favor, aguarde ⏳"):
         for arquivo in arquivos_pdf:
             caminho_temp = os.path.join("temp", arquivo.name)
             os.makedirs("temp", exist_ok=True)
@@ -699,16 +651,18 @@ if arquivos_pdf and st.button("🚀 Processar Extratos e Gerar Arquivos"):
             st.warning("⚠️ Nenhum dado foi extraído. Verifique se o PDF contém texto legível (não escaneado como imagem).")
             st.session_state.df_editado = None
         else:
-            st.session_state.df_editado = df_bruto
+            # Aplica a expansão das rubricas adicionais (Adiantamento 855 e Calculado 2002) para todos os leiautes
+            df_expandido = expandir_rubricas_adicionais(df_bruto, rubrica_adt_input, rubrica_calc_input)
+            st.session_state.df_editado = df_expandido
     else:
         st.warning("⚠ Nenhum dado válido foi encontrado nos arquivos enviados. Certifique-se de que os PDFs contêm texto selecionável (e não são imagens digitalizadas/scaneadas).")
         st.session_state.df_editado = None
 
 # Exibição da tabela e central de downloads baseada no session_state
 if st.session_state.df_editado is not None and not st.session_state.df_editado.empty:
-    st.success(f"🎉 Processamento concluído com sucesso! {len(st.session_state.df_editado)} registros mapeados e ajustados.")
-    st.markdown("### 📊 Prévia dos Dados Extraídos e Ajustados")
-    st.info("💡 **Dica:** O sistema já calculou o INSS progressivo, comparou com a Dedução Simplificada atualizada (R$ 607,20) e determinou a **Base Ajustada** mais vantajosa para todos os leiautes. Pode editar valores diretamente na tabela se necessário!")
+    st.success(f"🎉 Processamento concluído com sucesso! {len(st.session_state.df_editado)} registros mapeados (incluindo rubricas de adiantamento e cálculo).")
+    st.markdown("### 📊 Prévia dos Dados Extraídos")
+    st.info("💡 **Dica:** Pode alterar o **Código Empregado** ou qualquer outra informação clicando diretamente nas células da tabela abaixo antes de descarregar os ficheiros!")
     
     df_final = st.data_editor(st.session_state.df_editado, use_container_width=True, num_rows="dynamic", key="editor_dados")
     
