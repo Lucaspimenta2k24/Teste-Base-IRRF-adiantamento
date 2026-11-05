@@ -87,13 +87,6 @@ def converter_competencia_aaamm(competencia_str):
     return comp_limpa.zfill(6)[:6]
 
 def expandir_rubricas_adicionais(df_base, rubrica_adt="855", rubrica_calc="2002", rubrica_inss_ant="2001", rubrica_irrf_ant="2003"):
-    """
-    Expande o DataFrame gerando as linhas adicionais para:
-    1. IRRF Adiantamento (rubrica 855) -> 0,00
-    2. IRRF Calculado (rubrica 2002) -> 0,00
-    3. INSS Mês Anterior (rubrica 2001) -> Valor extraído ou 0,00
-    4. IRRF Mês Anterior (rubrica 2003) -> Valor extraído ou 0,00
-    """
     if df_base.empty:
         return df_base
     
@@ -429,22 +422,31 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
             val_inss_alterdata = "0,00"
             val_irrf_alterdata = "0,00"
 
-            # Varre as linhas do bloco do funcionário para capturar INSS e IRRF da Alterdata com precisão nas últimas colunas
-            for linha in linhas:
+            # Varredura inteligente de linhas do bloco para capturar INSS e IRRF da Alterdata de forma robusta
+            for i, linha in enumerate(linhas):
                 linha_up = linha.upper()
                 
-                # Procura por linhas que contenham I.N.S.S ou INSS (mas sem ignorar se for o valor líquido/desconto do mês anterior)
+                # Identifica a linha de INSS (ex: "I.N.S.S" ou "INSS")
                 if ("I.N.S.S" in linha_up or "INSS" in linha_up) and "BASE" not in linha_up:
-                    valores_inss = padrao_valor_moeda.findall(linha)
-                    if valores_inss:
-                        val_inss_alterdata = valores_inss[-1]
+                    valores_linha = padrao_valor_moeda.findall(linha)
+                    if valores_linha:
+                        val_inss_alterdata = valores_linha[-1]
+                    elif i + 1 < len(linhas):
+                        # Caso o valor esteja na linha logo abaixo
+                        valores_proximos = padrao_valor_moeda.findall(linhas[i + 1])
+                        if valores_proximos:
+                            val_inss_alterdata = valores_proximos[-1]
                 
-                # Procura por linhas que contenham I.R.R.F ou IRRF (excluindo a linha de Base de cálculo do IRRF já tratada)
+                # Identifica a linha de IRRF (ex: "I.R.R.F." ou "IRRF")
                 if ("I.R.R.F" in linha_up or "IRRF" in linha_up) and "BASE" not in linha_up:
-                    valores_irrf = padrao_valor_moeda.findall(linha)
-                    if valores_irrf:
-                        # Se houver mais de um valor na linha (ex: código, alíquota, valor), pega o último valor correspondente à última coluna
-                        val_irrf_alterdata = valores_irrf[-1]
+                    valores_linha = padrao_valor_moeda.findall(linha)
+                    if valores_linha:
+                        val_irrf_alterdata = valores_linha[-1]
+                    elif i + 1 < len(linhas):
+                        # Caso o valor esteja na linha logo abaixo
+                        valores_proximos = padrao_valor_moeda.findall(linhas[i + 1])
+                        if valores_proximos:
+                            val_irrf_alterdata = valores_proximos[-1]
 
             if emp_id and not any(d.get('CPF') == cpf and d.get('Código Empregado') == emp_id for d in dados_funcionarios):
                 dados_funcionarios.append({
@@ -682,7 +684,6 @@ st.markdown("### 📂 Upload de Extratos (PDF)")
 arquivos_pdf = st.file_uploader("Arraste ou selecione os arquivos PDF aqui", type=["pdf"], accept_multiple_files=True, label_visibility="collapsed")
 st.markdown('</div>', unsafe_allow_html=True)
 
-# Inicializa o session_state para persistir os dados editados sem resetar
 if "df_editado" not in st.session_state:
     st.session_state.df_editado = None
 
@@ -742,9 +743,8 @@ if arquivos_pdf and st.button("🚀 Processar Extratos e Gerar Arquivos"):
         st.warning("⚠ Nenhum dado válido foi encontrado nos arquivos enviados. Certifique-se de que os PDFs contêm texto selecionável (e não são imagens digitalizadas/scaneadas).")
         st.session_state.df_editado = None
 
-# Exibição da tabela e central de downloads baseada no session_state
 if st.session_state.df_editado is not None and not st.session_state.df_editado.empty:
-    st.success(f"🎉 Processamento concluído com sucesso! {len(st.session_state.df_editado)} registros mapeados (incluindo rubricas adicionais 855, 2002, 2001 e 2003).")
+    st.success(f"🎉 Processamento concluído com sucesso! {len(st.session_state.df_editado)} registros mapeados.")
     st.markdown("### 📊 Prévia dos Dados Extraídos")
     st.info("💡 **Dica:** Pode alterar o **Código Empregado** ou qualquer outra informação clicando diretamente nas células da tabela abaixo antes de descarregar os ficheiros!")
     
