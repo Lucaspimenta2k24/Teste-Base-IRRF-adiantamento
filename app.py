@@ -409,18 +409,14 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
                     emp_id = "1"
                     nome = "Funcionário"
                     
-                    # Extração robusta do Código do Empregado e do Nome na Alterdata (ex: 00267 JOSE FLORIVAL)
+                    # Extração do Código do Empregado e do Nome estruturados na Alterdata (ex: 00267 JOSE FLORIVAL)
                     for linha in linhas:
                         if cpf in linha:
                             partes_linha = linha.split(cpf)
                             resto_esq = partes_linha[0].strip()
                             resto_dir = partes_linha[1].strip() if len(partes_linha) > 1 else ""
                             
-                            # Procura o código do empregado (ex: números de 3 a 5 dígitos como 00267) à esquerda do CPF
-                            match_cod = re.search(r"\b(\d{3,5})\b", resto_esq)
-                            if match_cod:
-                                emp_id = match_cod.group(1).lstrip("0") or "0" # Mantém o número limpo ou completo
-                                # Se preferir com zeros à esquerda originais do PDF:
+                            # Varre o texto à esquerda do CPF para capturar o código do funcionário (ex: 00267)
                             match_cod_largo = re.findall(r"\b(\d{3,5})\b", resto_esq)
                             if match_cod_largo:
                                 emp_id = match_cod_largo[-1]
@@ -439,6 +435,14 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
                                 nome = re.sub(r"^[0-9\.\-\s]+", "", txt_ant).strip()
                                 break
 
+                    # Fallback robusto procurando em todo o bloco se o ID ainda estiver padrão
+                    if emp_id == "1":
+                        for linha in linhas:
+                            match_bloco_id = re.search(r"\b(00\d{3})\b", linha)
+                            if match_bloco_id:
+                                emp_id = match_bloco_id.group(1)
+                                break
+
                     nome = re.sub(r"^[0-9\.\-\s]+", "", nome).strip()
                     if not nome:
                         nome = f"Funcionário {emp_id}"
@@ -451,7 +455,7 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
                     val_inss_alterdata = "0,00"
                     val_irrf_alterdata = "0,00"
 
-                    # Varre as linhas do funcionário para capturar INSS e IRRF removendo parênteses
+                    # Varre as linhas do funcionário para capturar INSS e IRRF limpando parênteses
                     for linha in linhas:
                         linha_up = linha.upper()
                         
