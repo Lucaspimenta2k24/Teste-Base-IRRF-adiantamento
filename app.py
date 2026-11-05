@@ -409,14 +409,14 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
                     emp_id = "1"
                     nome = "Funcionário"
                     
-                    # Extração do Código do Empregado e do Nome estruturados na Alterdata (ex: 00267 JOSE FLORIVAL)
+                    # Extração precisa do Código do Empregado e do Nome no relatório da Alterdata
                     for linha in linhas:
                         if cpf in linha:
                             partes_linha = linha.split(cpf)
                             resto_esq = partes_linha[0].strip()
                             resto_dir = partes_linha[1].strip() if len(partes_linha) > 1 else ""
                             
-                            # Varre o texto à esquerda do CPF para capturar o código do funcionário (ex: 00267)
+                            # Captura o código correto do empregado à esquerda do CPF (ex: 00267)
                             match_cod_largo = re.findall(r"\b(\d{3,5})\b", resto_esq)
                             if match_cod_largo:
                                 emp_id = match_cod_largo[-1]
@@ -435,7 +435,6 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
                                 nome = re.sub(r"^[0-9\.\-\s]+", "", txt_ant).strip()
                                 break
 
-                    # Fallback robusto procurando em todo o bloco se o ID ainda estiver padrão
                     if emp_id == "1":
                         for linha in linhas:
                             match_bloco_id = re.search(r"\b(00\d{3})\b", linha)
@@ -455,11 +454,13 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
                     val_inss_alterdata = "0,00"
                     val_irrf_alterdata = "0,00"
 
-                    # Varre as linhas do funcionário para capturar INSS e IRRF limpando parênteses
+                    # Varre rigorosamente as linhas do bloco para capturar INSS (101) e IRRF (190) ignorando parênteses
                     for linha in linhas:
                         linha_up = linha.upper()
                         
-                        if "I.N.S.S" in linha_up and "BASE" not in linha_up and "S/FERIAS" not in linha_up:
+                        # Procura a linha de INSS do empregado
+                        if ("101" in linha_up or "I.N.S.S" in linha_up) and "BASE" not in linha_up and "S/FERIAS" not in linha_up and "DEPENDENTE" not in linha_up:
+                            # Tenta extrair valor entre parênteses (ex: (988,07))
                             match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
                             if match_parenteses:
                                 val_inss_alterdata = match_parenteses.group(1)
@@ -468,7 +469,8 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
                                 if valores:
                                     val_inss_alterdata = valores[-1]
                         
-                        if "I.R.R.F" in linha_up and "BASE" not in linha_up:
+                        # Procura a linha de IRRF do empregado
+                        if ("190" in linha_up or "I.R.R.F" in linha_up) and "BASE" not in linha_up and "RETIDO" not in linha_up:
                             match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
                             if match_parenteses:
                                 val_irrf_alterdata = match_parenteses.group(1)
