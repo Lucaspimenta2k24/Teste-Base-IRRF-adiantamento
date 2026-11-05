@@ -93,7 +93,7 @@ def expandir_rubricas_adicionais(df_base, rubrica_adt="855", rubrica_calc="2002"
     registros_expandidos = []
     
     for _, row in df_base.iterrows():
-        # 1. Linha principal (Base IRRF)
+        # 1. Linha principal (Base IRRF - ex: Rubrica padrão informada)
         row_main = row.copy()
         registros_expandidos.append(row_main.to_dict())
         
@@ -109,18 +109,18 @@ def expandir_rubricas_adicionais(df_base, rubrica_adt="855", rubrica_calc="2002"
         row_calc["Base IRRF"] = "0,00"
         registros_expandidos.append(row_calc.to_dict())
 
-        # 4. Linha INSS Mês Anterior (Rubrica 2001)
+        # 4. Linha INSS (Rubrica 2001) pegando o valor extraído corretamente da coluna auxiliar
         row_inss_ant = row.copy()
         row_inss_ant["Código Rubrica"] = str(rubrica_inss_ant).strip()
-        val_inss_ant = row.get("INSS Mes Anterior Val", "0,00")
-        row_inss_ant["Base IRRF"] = val_inss_ant if pd.notna(val_inss_ant) and str(val_inss_ant).strip() else "0,00"
+        val_inss = row.get("INSS Mes Anterior Val", "0,00")
+        row_inss_ant["Base IRRF"] = val_inss if pd.notna(val_inss) and str(val_inss).strip() and str(val_inss).strip() != "0,00" else "0,00"
         registros_expandidos.append(row_inss_ant.to_dict())
 
-        # 5. Linha IRRF Mês Anterior (Rubrica 2003)
+        # 5. Linha IRRF (Rubrica 2003) pegando o valor extraído corretamente da coluna auxiliar
         row_irrf_ant = row.copy()
         row_irrf_ant["Código Rubrica"] = str(rubrica_irrf_ant).strip()
-        val_irrf_ant = row.get("IRRF Mes Anterior Val", "0,00")
-        row_irrf_ant["Base IRRF"] = val_irrf_ant if pd.notna(val_irrf_ant) and str(val_irrf_ant).strip() else "0,00"
+        val_irrf = row.get("IRRF Mes Anterior Val", "0,00")
+        row_irrf_ant["Base IRRF"] = val_irrf if pd.notna(val_irrf) and str(val_irrf).strip() and str(val_irrf).strip() != "0,00" else "0,00"
         registros_expandidos.append(row_irrf_ant.to_dict())
         
     df_resultado = pd.DataFrame(registros_expandidos)
@@ -394,7 +394,7 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
         if not texto_completo.strip():
             return pd.DataFrame()
 
-        # Cada funcionário na Alterdata inicia com o código de 5 dígitos exatos seguido do CPF
+        # Cada funcionário na Alterdata inicia exatamente com o código de 5 dígitos seguido do CPF
         padrao_inicio_func = re.compile(r"(\d{5})\s+(\d{3}\.\d{3}\.\d{3}-\d{2})", re.IGNORECASE)
         matches = list(padrao_inicio_func.finditer(texto_completo))
         
@@ -424,7 +424,7 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
             if not nome:
                 nome = f"Funcionário {emp_id}"
 
-            # Extração da Base de IRRF
+            # Extração da Base de IRRF principal
             base_irrf = "0,00"
             match_base = padrao_base_irrf_estrito.search(bloco)
             if match_base:
@@ -433,23 +433,21 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
             val_inss_alterdata = "0,00"
             val_irrf_alterdata = "0,00"
 
-            # Busca blindada e direta por INSS (101) e IRRF (190) no bloco do funcionário
+            # Varredura dedicada em cada linha do bloco do empregado para capturar os valores entre parênteses
             for linha in linhas:
                 linha_up = linha.upper()
                 
-                # INSS (Rubrica 2001) -> Procura por 101 ou I.N.S.S
+                # INSS (Rubrica 2001) -> Linha com 101 ou I.N.S.S
                 if ("101" in linha_up or "I.N.S.S" in linha_up) and "BASE" not in linha_up and "S/FERIAS" not in linha_up and "DEPENDENTE" not in linha_up:
-                    # Captura rigorosamente o valor dentro de parênteses (ex: (365,18))
                     match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
                     if match_parenteses:
                         val_inss_alterdata = match_parenteses.group(1)
                     else:
-                        # Fallback pegando o último valor monetário da linha caso não haja parênteses
                         valores = re.findall(r"([\d\.]+,\d{2})", linha)
                         if valores:
                             val_inss_alterdata = valores[-1]
                 
-                # IRRF (Rubrica 2003) -> Procura por 190 ou I.R.R.F
+                # IRRF (Rubrica 2003) -> Linha com 190 ou I.R.R.F
                 if ("190" in linha_up or "I.R.R.F" in linha_up) and "BASE" not in linha_up and "RETIDO" not in linha_up:
                     match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
                     if match_parenteses:
