@@ -91,8 +91,8 @@ def expandir_rubricas_adicionais(df_base, rubrica_adt="855", rubrica_calc="2002"
     Expande o DataFrame gerando as linhas adicionais para:
     1. IRRF Adiantamento (rubrica 855) -> 0,00
     2. IRRF Calculado (rubrica 2002) -> 0,00
-    3. INSS Mês Anterior (rubrica 2001) -> Valor extraído (ex: Contmatic) ou 0,00
-    4. IRRF Mês Anterior (rubrica 2003) -> Valor extraído (ex: Contmatic) ou 0,00
+    3. INSS Mês Anterior (rubrica 2001) -> Valor extraído ou 0,00
+    4. IRRF Mês Anterior (rubrica 2003) -> Valor extraído ou 0,00
     """
     if df_base.empty:
         return df_base
@@ -100,7 +100,7 @@ def expandir_rubricas_adicionais(df_base, rubrica_adt="855", rubrica_calc="2002"
     registros_expandidos = []
     
     for _, row in df_base.iterrows():
-        # 1. Linha principal (Base IRRF - Rubrica do input)
+        # 1. Linha principal (Base IRRF)
         row_main = row.copy()
         registros_expandidos.append(row_main.to_dict())
         
@@ -131,7 +131,6 @@ def expandir_rubricas_adicionais(df_base, rubrica_adt="855", rubrica_calc="2002"
         registros_expandidos.append(row_irrf_ant.to_dict())
         
     df_resultado = pd.DataFrame(registros_expandidos)
-    # Remove colunas auxiliares se existirem
     cols_auxiliares = ["INSS Mes Anterior Val", "IRRF Mes Anterior Val"]
     df_resultado = df_resultado.drop(columns=[c for c in cols_auxiliares if c in df_resultado.columns])
     
@@ -368,13 +367,11 @@ def extrair_dados_extrato_contmatic(caminho_pdf, codigo_empresa="1", codigo_rubr
                     if "Função:" in possivel_nome or len(possivel_nome) > 3:
                         nome = possivel_nome.split("Função:")[0].strip()
 
-                # Regra 3: Captura valor de "INSS sobre Salário" (última coluna)
                 if "INSS SOBRE SALÁRIO" in linha.upper() or "INSS SOBRE SALARIO" in linha.upper():
                     valores_inss = padrao_valor_moeda.findall(linha)
                     if valores_inss:
                         val_inss_salario = valores_inss[-1]
 
-                # Regra 4: Captura valor de "IRRF sobre Salário" (última coluna)
                 if "IRRF SOBRE SALÁRIO" in linha.upper() or "IRRF SOBRE SALARIO" in linha.upper():
                     valores_irrf = padrao_valor_moeda.findall(linha)
                     if valores_irrf:
@@ -401,9 +398,12 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
         with pdfplumber.open(caminho_pdf) as pdf:
             texto_completo = "".join([p.extract_text() + "\n" for p in pdf.pages if p.extract_text()])
         if not texto_completo.strip(): return pd.DataFrame()
+        
         partes_bloco = re.split(r"(?=\b\d{5}\b.*?(\d{3}\.\d{3}\.\d{3}-\d{2}))", texto_completo, flags=re.DOTALL)
         padrao_empregado_cpf = re.compile(r"\b(\d{5})\b.*?(\d{3}\.\d{3}\.\d{3}-\d{2})")
         padrao_base_irrf_estrito = re.compile(r"Base\s*IRRF\s*[:\s]*([\d\.]+,\d{2})", re.IGNORECASE)
+        padrao_valor_moeda = re.compile(r"([\d\.]+,\d{2})")
+
         for bloco in partes_bloco:
             if not bloco.strip(): continue
             match_emp_cpf = padrao_empregado_cpf.search(bloco)
@@ -420,16 +420,37 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
                     if len(resto) > 2:
                         nome = resto
                         break
+            
             base_irrf = "0,00"
             match_base = padrao_base_irrf_estrito.search(bloco)
             if match_base:
                 base_irrf = match_base.group(1).strip()
+
+            val_inss_alterdata = "0,00"
+            val_irrf_alterdata = "0,00"
+
+            # Regras 3 e 4: Busca "I.N.S.S" e "I.R.R.F." na Alterdata obtendo o valor da última coluna
+            for linha in linhas:
+                linha_up = linha.upper()
+                if "I.N.S.S" in linha_up or "INSS" in linha_up:
+                    valores_inss = padrao_valor_moeda.findall(linha)
+                    if valores_inss:
+                        val_inss_alterdata = valores_inss[-1]
+                
+                if "I.R.R.F" in linha_up or "IRRF" in linha_up:
+                    # Evita confundir com a Base IRRF já capturada acima se estiver em outra linha
+                    if "BASE" not in linha_up:
+                        valores_irrf = padrao_valor_moeda.findall(linha)
+                        if valores_irrf:
+                            val_irrf_alterdata = valores_irrf[-1]
+
             if emp_id and not any(d.get('CPF') == cpf and d.get('Código Empregado') == emp_id for d in dados_funcionarios):
                 dados_funcionarios.append({
                     "Empresa": str(codigo_empresa).strip(), "Código Empregado": emp_id,
                     "Funcionário": nome, "CPF": cpf, "Competência": competencia.strip(),
                     "Base IRRF": base_irrf, "Código Rubrica": str(codigo_rubrica).strip(),
-                    "INSS Mes Anterior Val": "0,00", "IRRF Mes Anterior Val": "0,00"
+                    "INSS Mes Anterior Val": val_inss_alterdata,
+                    "IRRF Mes Anterior Val": val_irrf_alterdata
                 })
         df = pd.DataFrame(dados_funcionarios)
         if df.empty:
@@ -707,7 +728,6 @@ if arquivos_pdf and st.button("🚀 Processar Extratos e Gerar Arquivos"):
             st.warning("⚠️ Nenhum dado foi extraído. Verifique se o PDF contém texto legível (não escaneado como imagem).")
             st.session_state.df_editado = None
         else:
-            # Aplica a expansão das rubricas adicionais (Adiantamento, Calculado, INSS Mês Ant. e IRRF Mês Ant.)
             df_expandido = expandir_rubricas_adicionais(
                 df_bruto, 
                 rubrica_adt=rubrica_adt_input, 
