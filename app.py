@@ -394,12 +394,11 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
         if not texto_completo.strip():
             return pd.DataFrame()
 
-        # Cada funcionário na Alterdata inicia com um código de 5 dígitos exatos seguido do CPF (ex: 00206 968.225.701-87)
+        # Cada funcionário na Alterdata inicia com o código de 5 dígitos exatos seguido do CPF
         padrao_inicio_func = re.compile(r"(\d{5})\s+(\d{3}\.\d{3}\.\d{3}-\d{2})", re.IGNORECASE)
         matches = list(padrao_inicio_func.finditer(texto_completo))
         
         padrao_base_irrf_estrito = re.compile(r"Base\s*IRRF\s*[:\s]*([\d\.]+,\d{2})", re.IGNORECASE)
-        padrao_valor_moeda = re.compile(r"([\d\.]+,\d{2})")
 
         for idx, match in enumerate(matches):
             emp_id = match.group(1).strip()
@@ -434,27 +433,29 @@ def extrair_dados_extrato_alterdata(caminho_pdf, codigo_empresa="1", codigo_rubr
             val_inss_alterdata = "0,00"
             val_irrf_alterdata = "0,00"
 
-            # Varre as linhas do bloco para capturar INSS (Rubrica 2001) e IRRF (Rubrica 2003) ignorando os parênteses
+            # Busca blindada e direta por INSS (101) e IRRF (190) no bloco do funcionário
             for linha in linhas:
                 linha_up = linha.upper()
                 
-                # INSS (Rubrica 2001) -> Linha contendo 101 ou I.N.S.S
+                # INSS (Rubrica 2001) -> Procura por 101 ou I.N.S.S
                 if ("101" in linha_up or "I.N.S.S" in linha_up) and "BASE" not in linha_up and "S/FERIAS" not in linha_up and "DEPENDENTE" not in linha_up:
+                    # Captura rigorosamente o valor dentro de parênteses (ex: (365,18))
                     match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
                     if match_parenteses:
                         val_inss_alterdata = match_parenteses.group(1)
                     else:
-                        valores = padrao_valor_moeda.findall(linha)
+                        # Fallback pegando o último valor monetário da linha caso não haja parênteses
+                        valores = re.findall(r"([\d\.]+,\d{2})", linha)
                         if valores:
                             val_inss_alterdata = valores[-1]
                 
-                # IRRF (Rubrica 2003) -> Linha contendo 190 ou I.R.R.F
+                # IRRF (Rubrica 2003) -> Procura por 190 ou I.R.R.F
                 if ("190" in linha_up or "I.R.R.F" in linha_up) and "BASE" not in linha_up and "RETIDO" not in linha_up:
                     match_parenteses = re.search(r"\(([\d\.]+,\d{2})\)", linha)
                     if match_parenteses:
                         val_irrf_alterdata = match_parenteses.group(1)
                     else:
-                        valores = padrao_valor_moeda.findall(linha)
+                        valores = re.findall(r"([\d\.]+,\d{2})", linha)
                         if valores:
                             val_irrf_alterdata = valores[-1]
 
