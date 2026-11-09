@@ -578,35 +578,95 @@ def extrair_dados_extrato_sci(caminho_pdf, codigo_empresa="1", codigo_rubrica="2
             return pd.DataFrame()
 
         linhas = [l.strip() for l in texto_completo.split("\n") if l.strip()]
+        padrao_inss_sci = re.compile(
+            r"\b9\.101\s+I\s*\.\s*N\s*\.\s*S\s*\.\s*S\s*\.?(?:\s|$)",
+            re.IGNORECASE
+        )
+        padrao_ir_sci = re.compile(
+            r"\b9\.151\s+I\s*\.\s*R\s*\.?(?:\s|$)",
+            re.IGNORECASE
+        )
+        padrao_valor_moeda_sci = re.compile(
+            r"(?<![\d,])((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})(?!\d)"
+        )
+
+        def extrair_valor_campo_sci(linha, padrao_campo):
+            match_campo = padrao_campo.search(linha)
+            if not match_campo:
+                return None
+
+            valores_depois = padrao_valor_moeda_sci.findall(linha[match_campo.end():])
+            valores_antes = padrao_valor_moeda_sci.findall(linha[:match_campo.start()])
+
+            # O valor normalmente está depois do campo; a alternativa anterior
+            # atende às diferentes ordens de texto geradas por leitores de PDF.
+            if valores_depois:
+                return valores_depois[-1]
+            if valores_antes:
+                return valores_antes[-1]
+            return None
+
         i = 0
         while i < len(linhas):
-            linha = linhas[i]
+            linha = " ".join(linhas[i].split())
             if "ADMITIDO EM" in linha.upper():
-                match_func = re.search(r"^(\d+)\s+(.+?)\s+Admitido em", linha, re.IGNORECASE)
+                match_func = re.search(
+                    r"^(\d+)\s+(.+?)\s+Admitido em",
+                    linha,
+                    re.IGNORECASE
+                )
                 if match_func:
                     emp_id = match_func.group(1).strip()
                     nome_func = match_func.group(2).strip()
                     nome_func = re.sub(r"\s+\d+\s*\d*$", "", nome_func).strip()
-                    
+
                     base_irrf = "0,00"
+                    val_inss_sci = "0,00"
+                    val_ir_sci = "0,00"
+                    encontrou_inss = False
+                    encontrou_ir = False
                     j = i
-                    while j < len(linhas) and (j == i or "ADMITIDO EM" not in linhas[j].upper()):
-                        linha_atual = linhas[j]
-                        if "IR ->" in linha_atual.upper():
-                            partes_ir = linha_atual.upper().split("IR ->")
-                            if len(partes_ir) > 1:
-                                val_match = re.findall(r"([\d\.]+,\d{2})", partes_ir[1])
-                                if val_match:
-                                    base_irrf = val_match[0]
-                                    break
-                            elif j + 1 < len(linhas):
-                                val_match_prox = re.findall(r"([\d\.]+,\d{2})", linhas[j+1])
-                                if val_match_prox:
-                                    base_irrf = val_match_prox[0]
-                                    break
+
+                    while j < len(linhas) and (
+                        j == i or "ADMITIDO EM" not in linhas[j].upper()
+                    ):
+                        linha_atual = " ".join(linhas[j].split())
+                        linha_atual_up = linha_atual.upper()
+
+                        if "RESUMO GERAL" in linha_atual_up:
+                            break
+
+                        if not encontrou_inss:
+                            valor_inss = extrair_valor_campo_sci(
+                                linha_atual,
+                                padrao_inss_sci
+                            )
+                            if valor_inss is not None:
+                                val_inss_sci = valor_inss
+                                encontrou_inss = True
+
+                        if not encontrou_ir:
+                            valor_ir = extrair_valor_campo_sci(
+                                linha_atual,
+                                padrao_ir_sci
+                            )
+                            if valor_ir is not None:
+                                val_ir_sci = valor_ir
+                                encontrou_ir = True
+
+                        if "IR ->" in linha_atual_up:
+                            partes_ir = linha_atual_up.split("IR ->", 1)
+                            valores_ir = padrao_valor_moeda_sci.findall(partes_ir[1])
+                            if valores_ir:
+                                base_irrf = valores_ir[0]
+                                
                         j += 1
-                        
-                    if not any(d.get('Código Empregado') == emp_id and d.get('Base IRRF') == base_irrf for d in dados_funcionarios):
+
+                    if not any(
+                        d.get("Código Empregado") == emp_id
+                        and d.get("Base IRRF") == base_irrf
+                        for d in dados_funcionarios
+                    ):
                         dados_funcionarios.append({
                             "Empresa": str(codigo_empresa).strip(),
                             "Código Empregado": emp_id,
@@ -615,8 +675,8 @@ def extrair_dados_extrato_sci(caminho_pdf, codigo_empresa="1", codigo_rubrica="2
                             "Competência": competencia.strip(),
                             "Base IRRF": base_irrf,
                             "Código Rubrica": str(codigo_rubrica).strip(),
-                            "INSS Mes Anterior Val": "0,00",
-                            "IRRF Mes Anterior Val": "0,00"
+                            "INSS Mes Anterior Val": val_inss_sci,
+                            "IRRF Mes Anterior Val": val_ir_sci
                         })
             i += 1
 
