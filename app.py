@@ -193,9 +193,28 @@ def extrair_dados_extrato_exactus(caminho_pdf, codigo_empresa="1", codigo_rubric
             re.IGNORECASE
         )
         padrao_irrf_sal = re.compile(
-            r"IRRF\s+(?:SAL\.?|S/\s*SAL(?:A|Á)RIO)",
+            r"I\s*\.?\s*R\s*\.?\s*R\s*\.?\s*F\s*\.?\s+"
+            r"(?:SAL\s*\.?|S/\s*SAL(?:A|Á)RIO)",
             re.IGNORECASE
         )
+
+        def extrair_valor_campo(linha, padrao_campo):
+            match_campo = padrao_campo.search(linha)
+            if not match_campo:
+                return None
+
+            valores_antes = padrao_valor_moeda.findall(linha[:match_campo.start()])
+            valores_depois = padrao_valor_moeda.findall(linha[match_campo.end():])
+
+            # No texto visual do PDF o valor costuma estar depois do campo;
+            # em algumas extrações o PDF inverte a ordem das colunas.
+            if len(valores_depois) >= 2:
+                return valores_depois[-1]
+            if valores_antes:
+                return valores_antes[-1]
+            if valores_depois:
+                return valores_depois[-1]
+            return None
 
         for bloco in partes_texto:
             if not bloco.strip(): 
@@ -215,62 +234,62 @@ def extrair_dados_extrato_exactus(caminho_pdf, codigo_empresa="1", codigo_rubric
             match_cpf = padrao_cpf.search(bloco)
             cpf = match_cpf.group(1).strip() if match_cpf else "N/D (Exactus)"
 
-            base_irrf = "0,00"
-            val_inss_exactus = "0,00"
-            val_irrf_exactus = "0,00"
-            encontrou_inss = False
-            encontrou_irrf_sal = False
-
-            for i, linha in enumerate(linhas):
+            linhas_analisaveis = []
+            for linha in linhas:
                 linha_limpa = " ".join(linha.split())
                 linha_up = linha_limpa.upper()
-
-                # Interrompe antes do resumo para não capturar totais como se fossem do último empregado.
                 if (
                     "TOTAL GERAL" in linha_up
                     or "RESUMO TRIBUTÁRIO" in linha_up
                     or "TOTAL DE COLABORADORES" in linha_up
                 ):
                     break
+                linhas_analisaveis.append(linha_limpa)
 
-                # Rubrica 2001: valor imediatamente anterior ao campo I.N.S.S.
-                if not encontrou_inss:
-                    match_inss = padrao_inss.search(linha_limpa)
-                    if match_inss:
-                        valores_anteriores = padrao_valor_moeda.findall(
-                            linha_limpa[:match_inss.start()]
-                        )
-                        if valores_anteriores:
-                            val_inss_exactus = valores_anteriores[-1]
-                            encontrou_inss = True
+            base_irrf = "0,00"
+            val_inss_exactus = "0,00"
+            val_irrf_exactus = "0,00"
+            encontrou_inss = False
+            encontrou_irrf_sal = False
 
-                # Rubrica 2003: valor imediatamente anterior ao campo IRRF SAL.
-                if not encontrou_irrf_sal:
-                    match_irrf_sal = padrao_irrf_sal.search(linha_limpa)
-                    if match_irrf_sal:
-                        valores_anteriores = padrao_valor_moeda.findall(
-                            linha_limpa[:match_irrf_sal.start()]
-                        )
-                        if valores_anteriores:
-                            val_irrf_exactus = valores_anteriores[-1]
-                            encontrou_irrf_sal = True
+            # Mantém a extração da Base IRRF principal e lê as rubricas
+            # auxiliares respeitando a ordem visual ou a ordem interna do PDF.
+            for i, linha_limpa in enumerate(linhas_analisaveis):
+                linha_up = linha_limpa.upper()
 
-                # Mantém a extração da Base IRRF principal do relatório.
+                if not encontrou_inss and padrao_inss.search(linha_limpa):
+                    valor = extrair_valor_campo(linha_limpa, padrao_inss)
+                    if valor is None:
+                        inicio_janela = max(0, i - 1)
+                        fim_janela = min(len(linhas_analisaveis), i + 2)
+                        janela = " ".join(linhas_analisaveis[inicio_janela:fim_janela])
+                        valor = extrair_valor_campo(janela, padrao_inss)
+                    if valor is not None:
+                        val_inss_exactus = valor
+                        encontrou_inss = True
+
+                if not encontrou_irrf_sal and padrao_irrf_sal.search(linha_limpa):
+                    valor = extrair_valor_campo(linha_limpa, padrao_irrf_sal)
+                    if valor is None:
+                        inicio_janela = max(0, i - 1)
+                        fim_janela = min(len(linhas_analisaveis), i + 2)
+                        janela = " ".join(linhas_analisaveis[inicio_janela:fim_janela])
+                        valor = extrair_valor_campo(janela, padrao_irrf_sal)
+                    if valor is not None:
+                        val_irrf_exactus = valor
+                        encontrou_irrf_sal = True
+
                 if base_irrf == "0,00" and "IRRF R.M." in linha_up:
                     valores_linha = padrao_valor_moeda.findall(linha_limpa)
                     if valores_linha:
                         base_irrf = valores_linha[-1]
                     else:
-                        for linha_posterior in linhas[i + 1:]:
-                            linha_posterior_limpa = " ".join(linha_posterior.split())
-                            linha_posterior_up = linha_posterior_limpa.upper()
-                            if (
-                                "PROV" in linha_posterior_up
-                                or "TOTAL GERAL" in linha_posterior_up
-                            ):
+                        for linha_posterior in linhas_analisaveis[i + 1:]:
+                            linha_posterior_up = linha_posterior.upper()
+                            if "PROV" in linha_posterior_up:
                                 break
                             valores_posteriores = padrao_valor_moeda.findall(
-                                linha_posterior_limpa
+                                linha_posterior
                             )
                             if valores_posteriores:
                                 base_irrf = valores_posteriores[0]
