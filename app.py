@@ -182,14 +182,23 @@ def extrair_dados_extrato_exactus(caminho_pdf, codigo_empresa="1", codigo_rubric
         if not texto_completo.strip(): 
             return pd.DataFrame()
 
-        partes_texto = re.split(r"(?=\d{4,5}\.\d{3}\s*-)", texto_completo)
-        padrao_cabecalho = re.compile(r"^(\d{4,5}\.\d{3})\s*-\s*(.+)", re.IGNORECASE)
+        partes_texto = re.split(r"(?m)(?=^\d{4,5}\.\d{3}\s*-\s*)", texto_completo)
+        padrao_cabecalho = re.compile(r"^\s*(\d{4,5}\.\d{3})\s*-\s*(.+)$", re.IGNORECASE)
         padrao_cpf = re.compile(r"CPF\s*(\d{3}\.\d{3}\.\d{3}-\d{2})", re.IGNORECASE)
+        padrao_valor_moeda = re.compile(
+            r"(?<![\d,])((?:\d{1,3}(?:\.\d{3})*|\d+),\d{2})(?!\d)"
+        )
+        padrao_inss = re.compile(
+            r"I\s*\.\s*N\s*\.\s*S\s*\.\s*S\s*\.?",
+            re.IGNORECASE
+        )
+        padrao_irrf_sal = re.compile(
+            r"IRRF\s+(?:SAL\.?|S/\s*SAL(?:A|Á)RIO)",
+            re.IGNORECASE
+        )
 
         for bloco in partes_texto:
             if not bloco.strip(): 
-                continue
-            if "TOTAL GERAL" in bloco.upper() or "RESUMO TRIBUTÁRIO" in bloco.upper():
                 continue
             
             linhas = [l.strip() for l in bloco.split("\n") if l.strip()]
@@ -207,17 +216,65 @@ def extrair_dados_extrato_exactus(caminho_pdf, codigo_empresa="1", codigo_rubric
             cpf = match_cpf.group(1).strip() if match_cpf else "N/D (Exactus)"
 
             base_irrf = "0,00"
+            val_inss_exactus = "0,00"
+            val_irrf_exactus = "0,00"
+            encontrou_inss = False
+            encontrou_irrf_sal = False
+
             for i, linha in enumerate(linhas):
-                if "IRRF R.M." in linha.upper():
-                    valores_linha = re.findall(r"([\d\.]+,\d{2})", linha)
+                linha_limpa = " ".join(linha.split())
+                linha_up = linha_limpa.upper()
+
+                # Interrompe antes do resumo para não capturar totais como se fossem do último empregado.
+                if (
+                    "TOTAL GERAL" in linha_up
+                    or "RESUMO TRIBUTÁRIO" in linha_up
+                    or "TOTAL DE COLABORADORES" in linha_up
+                ):
+                    break
+
+                # Rubrica 2001: valor imediatamente anterior ao campo I.N.S.S.
+                if not encontrou_inss:
+                    match_inss = padrao_inss.search(linha_limpa)
+                    if match_inss:
+                        valores_anteriores = padrao_valor_moeda.findall(
+                            linha_limpa[:match_inss.start()]
+                        )
+                        if valores_anteriores:
+                            val_inss_exactus = valores_anteriores[-1]
+                            encontrou_inss = True
+
+                # Rubrica 2003: valor imediatamente anterior ao campo IRRF SAL.
+                if not encontrou_irrf_sal:
+                    match_irrf_sal = padrao_irrf_sal.search(linha_limpa)
+                    if match_irrf_sal:
+                        valores_anteriores = padrao_valor_moeda.findall(
+                            linha_limpa[:match_irrf_sal.start()]
+                        )
+                        if valores_anteriores:
+                            val_irrf_exactus = valores_anteriores[-1]
+                            encontrou_irrf_sal = True
+
+                # Mantém a extração da Base IRRF principal do relatório.
+                if base_irrf == "0,00" and "IRRF R.M." in linha_up:
+                    valores_linha = padrao_valor_moeda.findall(linha_limpa)
                     if valores_linha:
                         base_irrf = valores_linha[-1]
-                        break
-                    elif i + 1 < len(linhas):
-                        valores_prox = re.findall(r"([\d\.]+,\d{2})", linhas[i + 1])
-                        if valores_prox:
-                            base_irrf = valores_prox[-1]
-                            break
+                    else:
+                        for linha_posterior in linhas[i + 1:]:
+                            linha_posterior_limpa = " ".join(linha_posterior.split())
+                            linha_posterior_up = linha_posterior_limpa.upper()
+                            if (
+                                "PROV" in linha_posterior_up
+                                or "TOTAL GERAL" in linha_posterior_up
+                            ):
+                                break
+                            valores_posteriores = padrao_valor_moeda.findall(
+                                linha_posterior_limpa
+                            )
+                            if valores_posteriores:
+                                base_irrf = valores_posteriores[0]
+                                break
 
             if emp_id and not any(d.get('Código Empregado') == emp_id for d in dados_funcionarios):
                 dados_funcionarios.append({
@@ -228,8 +285,8 @@ def extrair_dados_extrato_exactus(caminho_pdf, codigo_empresa="1", codigo_rubric
                     "Competência": competencia.strip(),
                     "Base IRRF": base_irrf,
                     "Código Rubrica": str(codigo_rubrica).strip(),
-                    "INSS Mes Anterior Val": "0,00",
-                    "IRRF Mes Anterior Val": "0,00"
+                    "INSS Mes Anterior Val": val_inss_exactus,
+                    "IRRF Mes Anterior Val": val_irrf_exactus
                 })
 
         df = pd.DataFrame(dados_funcionarios)
